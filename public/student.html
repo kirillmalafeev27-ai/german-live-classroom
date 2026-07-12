@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deutsch Live · Ученик</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="student-body">
+  <main class="student-shell">
+    <section id="joinView" class="student-join card" hidden>
+      <div class="brand-lockup"><div class="brand-mark">DE</div><div><b>Deutsch Live</b><span>учебная сессия</span></div></div>
+      <h1>Подключиться к уроку</h1>
+      <p>Введите код и PIN, которые показывает преподаватель. По персональной ссылке эти поля заполняются автоматически.</p>
+      <form id="joinForm" class="auth-form">
+        <label class="field"><span>Код комнаты</span><input id="joinCode" autocomplete="off" maxlength="12" required placeholder="AB12CD"></label>
+        <label class="field"><span>PIN</span><input id="joinPin" inputmode="numeric" autocomplete="one-time-code" required placeholder="1234"></label>
+        <button id="joinButton" class="primary big-action" type="submit">Войти в урок</button>
+      </form>
+    </section>
+
+    <section id="lessonView" class="student-lesson" hidden>
+      <header class="student-head card">
+        <div class="student-title"><div class="brand-mark">DE</div><div><h1 id="studentName">Ученик</h1><p><span id="lessonTitle">Урок немецкого</span> · <b id="levelLabel">A0</b> · комната <b id="roomLabel">—</b></p></div></div>
+        <div class="student-head-status"><span id="studentConnectionStatus" class="status-badge pending">Подключаемся…</span><span id="micStatus" class="status-badge muted">Микрофон выключен</span></div>
+      </header>
+
+      <button id="audioUnlock" class="audio-unlock" type="button">🔊 Нажмите один раз, чтобы разрешить звук</button>
+
+      <section class="mic-card card">
+        <div class="mic-top">
+          <div><span class="eyebrow">Ваша речь</span><h2 style="margin:4px 0 0">Говорите по-немецки</h2></div>
+          <div class="mic-controls"><button id="startMicButton" class="mic-button start" type="button">🎙 Включить микрофон</button><button id="stopMicButton" class="mic-button stop" type="button" hidden>■ Остановить</button></div>
+        </div>
+        <div class="microphone-device-row">
+          <label class="field microphone-select-field"><span>Микрофон</span><select id="studentMicSelect"><option value="">Системный микрофон по умолчанию</option></select></label>
+          <div class="audio-level-panel" aria-label="Уровень входящего звука">
+            <div class="audio-level-head"><span id="studentMicSignal" class="mic-signal">Микрофон не активен</span><b id="studentMicMeterValue">0%</b></div>
+            <div class="audio-meter"><div id="studentMicMeterFill" class="audio-meter-fill"></div></div>
+          </div>
+        </div>
+        <div id="liveTranscript" class="live-student-transcript" aria-live="polite">После включения микрофона здесь появится распознавание.</div>
+        <div id="committedTranscript" class="committed-history"></div>
+      </section>
+
+      <section id="listenCard" class="listen-card card">
+        <div class="listen-orb">♫</div>
+        <h2 id="listenState">Ждите реплику преподавателя</h2>
+        <p>Сначала слушайте. Текст можно открыть только по вашей кнопке.</p>
+        <div class="student-actions">
+          <button id="repeatButton" class="student-action" type="button">🔁 Повторить</button>
+          <button id="slowerButton" class="student-action" type="button">🐢 Медленнее</button>
+          <button id="keywordButton" class="student-action" type="button">Ключевое слово</button>
+          <button id="starterButton" class="student-action" type="button">Начало ответа</button>
+          <button id="transcriptButton" class="student-action" type="button">Показать транскрипт</button>
+        </div>
+        <div id="revealBox" class="reveal-box" hidden><small id="revealLabel"></small><b id="revealText" lang="de"></b></div>
+      </section>
+
+      <section class="typed-card card">
+        <div class="card-head"><div><span class="eyebrow">Резервный режим</span><h3>Отправить текстом</h3><p>Работает даже без микрофона или ElevenLabs Scribe.</p></div></div>
+        <form id="typedForm" class="typed-row"><input id="typedInput" lang="de" placeholder="Ich wohne in Berlin."><button id="sendTypedButton" class="secondary" type="submit">Отправить</button></form>
+      </section>
+
+      <section id="endedPanel" class="ended-panel card" hidden><h2>Урок завершён</h2><p id="endedSummary">Спасибо за работу!</p></section>
+    </section>
+  </main>
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/assets/student.js"></script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deutsch Live · Кабинет преподавателя</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <section id="loginView" class="auth-view" hidden>
+    <div class="auth-card card">
+      <div class="brand-lockup"><div class="brand-mark">DE</div><div><b>Deutsch Live</b><span>кабинет преподавателя</span></div></div>
+      <h1>Вход преподавателя</h1>
+      <p>Пароль задаётся переменной <code>ADMIN_PASSWORD</code> в Render.</p>
+      <form id="loginForm" class="auth-form">
+        <label class="field"><span>Пароль</span><input id="loginPassword" type="password" autocomplete="current-password" required></label>
+        <button id="loginButton" class="primary big-action" type="submit">Войти</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="appView" class="teacher-app" hidden>
+    <header class="topbar">
+      <div class="brand-lockup"><div class="brand-mark">DE</div><div><b>Deutsch Live</b><span>Teacher-gated voice agent</span></div></div>
+      <div class="topbar-right">
+        <div id="serviceStatus" class="service-status"></div>
+        <button id="logoutButton" class="ghost" type="button">Выйти</button>
+      </div>
+    </header>
+
+    <main class="teacher-layout">
+      <aside class="teacher-column sidebar-column sticky-column">
+        <section class="sidebar-card card">
+          <div class="card-head"><div><span class="eyebrow">Ученики</span><h3>Профили</h3></div><button id="newProfileButton" class="secondary" type="button">+ Новый</button></div>
+          <div id="profileList" class="profile-list"></div>
+        </section>
+        <section class="sidebar-card card">
+          <div class="card-head"><div><span class="eyebrow">Программа A1</span><h3>16 модулей</h3></div></div>
+          <div id="curriculumQuick" class="curriculum-quick"></div>
+        </section>
+      </aside>
+
+      <section class="teacher-column profile-column">
+        <form id="profileForm" class="profile-editor card">
+          <div class="card-head">
+            <div><span class="eyebrow">Педагогическая модель</span><h2 id="profileTitle">Новый ученик</h2><p>Задайте реальные границы языка, а не только формальный CEFR.</p></div>
+            <button id="deleteProfileButton" class="danger" type="button" hidden>Удалить</button>
+          </div>
+
+          <section class="form-section">
+            <div class="grid-2">
+              <label class="field"><span>Имя ученика</span><input id="profileName" required placeholder="Например, Саша"></label>
+              <label class="field"><span>Уровень</span><select id="profileLevel"><option>A0</option><option>A1</option><option>A2</option><option>B1</option><option>B2</option><option>C1</option><option>C2</option></select></label>
+              <label class="field"><span>Стерильность речи</span><select id="profileSterility"><option value="high">Высокая — только известное</option><option value="medium">Средняя — один новый элемент</option><option value="low">Низкая — естественная речь</option></select></label>
+              <div class="grid-2">
+                <label class="field"><span>Макс. слов</span><input id="profileMaxWords" type="number" min="2" max="40" value="6"></label>
+                <label class="field"><span>Новых слов</span><input id="profileMaxNewWords" type="number" min="0" max="8" value="0"></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3>Текущий модуль</h3>
+            <p>Программа взята из содержания курса; словарь — со страниц Wörterliste в загруженном Übungsbuch.</p>
+            <label class="field"><span>Урок</span><select id="lessonSelect"></select></label>
+            <div id="lessonDetails" class="lesson-details"></div>
+          </section>
+
+          <section class="form-section">
+            <h3>Словарь как фишки</h3>
+            <p>Каждое нажатие меняет состояние: без отметки → знает → учим → не знает → сброс.</p>
+            <div class="vocab-toolbar"><input id="vocabularySearch" type="search" placeholder="Найти слово или фразу…"></div>
+            <div id="vocabLegend" class="vocab-legend"></div>
+            <div id="vocabularyChips" class="vocabulary-chips"></div>
+          </section>
+
+          <section class="form-section">
+            <h3>Свободный ввод знаний</h3>
+            <p>Сюда можно добавить слова и конструкции вне учебника.</p>
+            <div class="grid-3">
+              <label class="field"><span>Что уже знает</span><textarea id="knownWordsInput" placeholder="ich, wohnen, Berlin"></textarea></label>
+              <label class="field"><span>Что изучаем сейчас</span><textarea id="learningWordsInput" placeholder="aus + Land"></textarea></label>
+              <label class="field"><span>Что не знает</span><textarea id="unknownWordsInput" placeholder="Warum, weil, Perfekt"></textarea></label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3>Цели и ограничения</h3>
+            <div class="grid-2">
+              <label class="field"><span>Известная грамматика</span><textarea id="knownGrammarInput" placeholder="sein в Singular; W-Fragen"></textarea></label>
+              <label class="field"><span>Повторить из прошлых тем</span><textarea id="repeatTopicsInput" placeholder="предлоги aus/in; порядок слов"></textarea></label>
+              <label class="field"><span>Изучить / ожидаемый прогресс</span><textarea id="learningGoalsInput" placeholder="самостоятельно представиться; задать 3 вопроса"></textarea></label>
+              <label class="field"><span>Чего избегать</span><textarea id="avoidInput" placeholder="придаточные; синонимы; объяснения по-немецки"></textarea></label>
+            </div>
+            <label class="field" style="margin-top:14px"><span>Заметки преподавателя</span><textarea id="notesInput" placeholder="Темп, типичные ошибки, интересы, реакция на подсказки…"></textarea></label>
+          </section>
+
+          <div class="form-foot">
+            <button id="saveProfileButton" class="secondary" type="submit">Сохранить профиль</button>
+            <button id="createRoomButton" class="primary" type="button">Создать учебную комнату</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="teacher-column live-column">
+        <div id="roomEmpty" class="room-placeholder card">
+          <div class="room-icon">🎙️</div><h2>Комната ещё не создана</h2><p>Сохраните профиль, выберите модуль и нажмите «Создать учебную комнату».</p>
+        </div>
+
+        <div id="roomPanel" class="room-panel" hidden>
+          <section class="room-header card">
+            <div class="room-code-row">
+              <div class="room-code-box"><small>Комната</small><b id="roomCode">—</b></div>
+              <div class="room-code-box"><small>PIN</small><b id="roomPin">—</b></div>
+              <input id="roomStudentUrl" class="room-url" readonly aria-label="Ссылка ученика">
+              <button id="copyRoomLinkButton" class="secondary" type="button">Копировать ссылку</button>
+            </div>
+            <div class="room-status-row"><span id="connectionStatus" class="status-badge muted">Не подключено</span><span id="studentStatus" class="status-badge muted">Ученик не подключён</span><span id="modelStatus" class="status-badge muted">Модель</span></div>
+          </section>
+
+          <section class="teacher-mic-card card">
+            <div class="card-head">
+              <div><span class="eyebrow">Ваш голос → голос носителя</span><h2>Произнесите команду ученику</h2><p>Scribe транскрибирует вашу немецкую фразу в реальном времени. Вы можете быстро исправить текст и одной кнопкой озвучить его через ElevenLabs на клиенте ученика.</p></div>
+              <span id="teacherMicStatus" class="status-badge muted">Микрофон преподавателя выключен</span>
+            </div>
+            <div class="microphone-device-row">
+              <label class="field microphone-select-field"><span>Микрофон преподавателя</span><select id="teacherMicSelect"><option value="">Системный микрофон по умолчанию</option></select></label>
+              <div class="audio-level-panel" aria-label="Уровень входящего звука преподавателя">
+                <div class="audio-level-head"><span id="teacherMicSignal" class="mic-signal">Микрофон не активен</span><b id="teacherMicMeterValue">0%</b></div>
+                <div class="audio-meter"><div id="teacherMicMeterFill" class="audio-meter-fill"></div></div>
+              </div>
+            </div>
+            <div class="teacher-mic-controls">
+              <button id="teacherMicStartButton" class="mic-button start" type="button">🎙 Включить мой микрофон</button>
+              <button id="teacherMicStopButton" class="mic-button stop" type="button" hidden>■ Остановить</button>
+              <button id="teacherMicClearButton" class="ghost" type="button">Очистить</button>
+            </div>
+            <div class="partial-wrap teacher-partial-wrap"><small>Распознавание в моменте</small><div id="teacherMicPartial" class="partial-transcript">Включите микрофон и произнесите команду по-немецки.</div></div>
+            <textarea id="teacherCommandInput" class="teacher-command-input" lang="de" placeholder="Öffne bitte das Buch auf Seite zehn."></textarea>
+            <div class="teacher-command-foot">
+              <small>Ученику не показывается текст автоматически. Он услышит фразу только после вашего подтверждения и сможет открыть транскрипт своей кнопкой.</small>
+              <button id="teacherMicSendButton" class="speak-button teacher-direct-speak" type="button" disabled>▶ Выдать ученику вашу команду голосом носителя</button>
+            </div>
+          </section>
+
+          <section class="live-card card">
+            <div class="card-head"><div><span class="eyebrow">Живая реплика</span><h2>Что сказал ученик</h2><p>Можно дождаться микрофона или ввести текст самому.</p></div></div>
+            <div class="partial-wrap"><small>Промежуточное распознавание</small><div id="partialTranscript" class="partial-transcript">Ожидаем речь ученика…</div></div>
+            <textarea id="transcriptInput" class="transcript-input" lang="de" placeholder="Ich komme Berlin."></textarea>
+            <label class="field" style="margin-top:10px"><span>Свободная инструкция модели</span><input id="teacherInstruction" placeholder="Например: спроси о месте жительства, без нового слова"></label>
+            <div class="actions" style="margin-top:10px"><button id="generateButton" class="primary" type="button">Подготовить ответ</button></div>
+            <div id="aiStatus" class="ai-status">Ответ появится после реплики ученика.</div>
+          </section>
+
+          <section class="action-board card">
+            <div class="chip-section"><b>Что сделать</b><div class="action-chips">
+              <button class="action-chip semantic semantic-action" data-action="QUESTION" type="button">❓ Спросить</button>
+              <button class="action-chip semantic semantic-action" data-action="ANSWER" type="button">💬 Ответить</button>
+              <button class="action-chip semantic semantic-action" data-action="RECAST" type="button">✓ Исправить</button>
+              <button class="action-chip semantic semantic-action" data-action="CONTINUE" type="button">➡ Продолжить</button>
+              <button class="action-chip semantic semantic-action" data-action="CLARIFY" type="button">👂 Уточнить</button>
+            </div></div>
+            <div class="chip-section"><b>Как изменить текущую фразу</b><div class="action-chips">
+              <button class="action-chip transform transform-action" data-variant="simpler" type="button">Проще</button>
+              <button class="action-chip transform transform-action" data-variant="shorter" type="button">Короче</button>
+              <button class="action-chip transform transform-action" data-variant="yes_no" type="button">Ja / Nein</button>
+              <button class="action-chip transform transform-action" data-variant="choice" type="button">Выбор из 2</button>
+              <button class="action-chip transform transform-action" data-variant="starter" type="button">Дать начало</button>
+              <button class="action-chip transform transform-action" data-variant="full_model" type="button">Полный ответ</button>
+              <button class="action-chip transform transform-action" data-instruction="Не используй ни одного нового слова; только явно знакомая лексика." type="button">Без новых слов</button>
+              <button class="action-chip transform transform-action" data-instruction="Предложи другой естественный вариант с теми же ограничениями." type="button">Другой вариант</button>
+            </div></div>
+          </section>
+
+          <section class="candidate-card card">
+            <div class="card-head"><div><span class="eyebrow">Контроль преподавателя</span><h2>Фраза для ученика</h2><p>Выберите готовую фишку или исправьте текст вручную.</p></div></div>
+            <div class="teacher-insight">
+              <div class="insight-box"><small>Предполагаемый смысл</small><p id="interpretation">—</p></div>
+              <div class="insight-box"><small>Исправленная реплика ученика</small><p id="correctedStudent" lang="de">—</p></div>
+            </div>
+            <textarea id="candidateEditor" class="candidate-editor" lang="de" placeholder="Здесь появится фраза модели"></textarea>
+            <div id="candidateMeta" class="candidate-meta"></div>
+            <div id="variantsGrid" class="variants-grid"></div>
+            <div class="speech-actions">
+              <button id="speakButton" class="speak-button" type="button" disabled>▶ Сказать ученику</button>
+              <button id="slowerSpeakButton" class="slow-button" type="button" disabled>🐢 Медленнее</button>
+            </div>
+          </section>
+
+          <section class="scaffold-card card">
+            <div class="card-head"><div><span class="eyebrow">Scaffolding</span><h3>Лестница помощи</h3><p>Любая ступень выбирается одним нажатием.</p></div></div>
+            <div id="scaffoldRow" class="scaffold-row"></div>
+            <div id="assessmentRow" class="assessment-row">
+              <button class="assessment-button" data-assessment="independent" type="button">🌱 Самостоятельно</button>
+              <button class="assessment-button" data-assessment="prompted" type="button">🪜 С помощью</button>
+              <button class="assessment-button" data-assessment="error" type="button">⚠ Ошибка</button>
+              <button class="assessment-button" data-assessment="mastered" type="button">✓ Освоено</button>
+            </div>
+            <div id="sessionLog" class="session-log"></div>
+            <div class="actions" style="margin-top:12px"><button id="endSessionButton" class="danger" type="button">Завершить урок и сделать итог</button></div>
+            <div id="summaryPanel" class="summary-panel" hidden><h3>Итог урока</h3><div id="summaryText"></div></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/assets/teacher.js"></script>
+</body>
+</html>

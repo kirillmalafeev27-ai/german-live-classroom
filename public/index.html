@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Синхронный голосовой сервис для уроков немецкого с преподавателем, AITUNNEL и ElevenLabs.">
+  <title>Deutsch Live · Учебная сессия</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="landing">
+    <section class="landing-shell card">
+      <div class="landing-main">
+        <div class="brand-lockup">
+          <div class="brand-mark">DE</div>
+          <div><b>Deutsch Live</b><span>teacher-gated voice classroom</span></div>
+        </div>
+        <h1>Ученик говорит.<br>Вы управляете ответом.</h1>
+        <p class="landing-lead">Сервис распознаёт немецкую речь, заранее готовит адаптированный пакет реакций, но произносит выбранную фразу только после решения преподавателя. Scaffolding встроен в каждую реплику.</p>
+        <div class="landing-actions">
+          <a class="primary big-action" href="/teacher">Открыть кабинет преподавателя</a>
+          <a class="secondary big-action" href="/student">Войти как ученик</a>
+        </div>
+        <p class="footer-note">Техническое API доступно по адресу <a href="/api-docs">/api-docs</a></p>
+      </div>
+      <aside class="landing-aside">
+        <div class="feature-list">
+          <div class="feature"><i>1</i><div><b>Мгновенная синхронизация</b><span>WebSocket-комната связывает вкладки преподавателя и ученика.</span></div></div>
+          <div class="feature"><i>2</i><div><b>Фишки вместо комбинаций</b><span>Проще, Ja/Nein, A/B, начало, полный образец, recast и продолжение.</span></div></div>
+          <div class="feature"><i>3</i><div><b>Профиль реальных знаний</b><span>Что знает, учит, не знает, повторяет и чего модель обязана избегать.</span></div></div>
+          <div class="feature"><i>4</i><div><b>16 модулей A1</b><span>Программа и Wörterlisten рабочей тетради уже превращены в выбираемые фишки.</span></div></div>
+        </div>
+        <div class="landing-note">Для рабочего голоса и распознавания добавьте ключ ElevenLabs. Для генерации — AITUNNEL. Без ключей сервис остаётся доступным в демонстрационном режиме с ручным вводом и браузерным голосом.</div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

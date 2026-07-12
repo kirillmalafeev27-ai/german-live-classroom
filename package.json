@@ -1,0 +1,33 @@
+{
+  "name": "german-live-classroom",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Teacher-gated realtime German lesson copilot for Zoom and browser sessions",
+  "type": "module",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node src/server.js",
+    "dev": "npm run build && node --watch src/server.js",
+    "smoke": "node scripts/smoke-test.mjs",
+    "realtime-test": "node scripts/realtime-test.mjs"
+  },
+  "dependencies": {
+    "@elevenlabs/client": "^1.15.0",
+    "compression": "^1.8.1",
+    "dotenv": "^17.2.1",
+    "esbuild": "^0.25.9",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.8.1",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}
