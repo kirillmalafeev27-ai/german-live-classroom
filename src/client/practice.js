@@ -173,7 +173,7 @@ async function startSession() {
     presentAiTurn(sc.opener, '', '');
     state.history.push({ role: 'ai', text: sc.opener });
   } else {
-    await requestReply('');
+    await requestReply();
   }
 }
 
@@ -184,10 +184,12 @@ async function sendUser(text) {
   els.liveTranscript.textContent = `Вы сказали: «${value}»`;
   els.correctionLine.hidden = true;
   state.history.push({ role: 'user', text: value });
-  await requestReply(value);
+  await requestReply();
 }
 
-async function requestReply(userText) {
+// The client keeps the whole conversation in state.history and sends it every
+// turn, so the model has full memory and moves the dialogue forward.
+async function requestReply() {
   if (state.busy) return;
   state.busy = true;
   els.status.textContent = 'ИИ думает…';
@@ -200,8 +202,7 @@ async function requestReply(userText) {
         moduleId: state.moduleId,
         mode: state.mode,
         scenarioId: state.scenarioId,
-        history: state.history.slice(-16),
-        userText
+        history: state.history.slice(-40)
       }
     });
     const reply = data.reply_de || '…';

@@ -460,7 +460,7 @@ async function startSession() {
     presentAiTurn(sc.opener, "", "");
     state.history.push({ role: "ai", text: sc.opener });
   } else {
-    await requestReply("");
+    await requestReply();
   }
 }
 async function sendUser(text) {
@@ -473,9 +473,9 @@ async function sendUser(text) {
   els.liveTranscript.textContent = `\u0412\u044B \u0441\u043A\u0430\u0437\u0430\u043B\u0438: \xAB${value}\xBB`;
   els.correctionLine.hidden = true;
   state.history.push({ role: "user", text: value });
-  await requestReply(value);
+  await requestReply();
 }
-async function requestReply(userText) {
+async function requestReply() {
   if (state.busy) return;
   state.busy = true;
   els.status.textContent = "\u0418\u0418 \u0434\u0443\u043C\u0430\u0435\u0442\u2026";
@@ -488,8 +488,7 @@ async function requestReply(userText) {
         moduleId: state.moduleId,
         mode: state.mode,
         scenarioId: state.scenarioId,
-        history: state.history.slice(-16),
-        userText
+        history: state.history.slice(-40)
       }
     });
     const reply = data.reply_de || "\u2026";

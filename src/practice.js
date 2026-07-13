@@ -124,6 +124,7 @@ USEFUL VOCABULARY (prefer these words): ${vocab}.
 RULES:
 - Speak simple A1 German only: short sentences, present tense (plus the target grammar), known words.
 - Keep every "reply_de" to 1-3 short sentences and normally end with ONE question so the dialogue continues.
+- MEMORY & PROGRESS: The full conversation so far is given to you. Read it. NEVER repeat a question you (the assistant) already asked and NEVER re-ask something the learner already answered. Each of your turns must move the dialogue FORWARD to a new detail, sub-topic or follow-up that builds on the learner's previous answers. If a natural line of talk is exhausted, open a new related sub-topic within the module — do not loop back to the beginning.
 - Steer the conversation so the learner is naturally forced to use the TARGET GRAMMAR.
 - Check the learner's last message. If there are wrong German words, put a short correction in "correction" using the pattern "Nicht <falsch>. <richtig>." (only the wrong words; chain several if needed). If the learner was correct, set "correction" to "" and you may briefly acknowledge in reply_de like "Genau!" or "Super!".
 - "hint_ru": ONE short Russian hint (max 120 chars) telling the learner what to say next or which grammar to use. Never put German corrections here.
@@ -149,13 +150,25 @@ Lead a natural dialogue on the module topic. Ask questions that require the lear
 export function buildPracticeMessages({ moduleId, mode, scenario, history = [], userText = '' }) {
   const system = buildPracticeSystemPrompt({ moduleId, mode, scenario });
   const messages = [{ role: 'system', content: system }];
-  for (const turn of history.slice(-16)) {
-    if (!turn || !turn.text) continue;
-    messages.push({ role: turn.role === 'ai' ? 'assistant' : 'user', content: String(turn.text) });
+
+  // The client is the single source of truth for the conversation and sends the
+  // whole history (its last turn is usually the learner's message). We map every
+  // turn so the model always has the full context and can move forward instead
+  // of looping. `userText` is only a fallback for callers that don't append it
+  // to history themselves.
+  const turns = history.map((turn) => ({
+    role: turn?.role === 'ai' ? 'assistant' : 'user',
+    content: String(turn?.text || '')
+  })).filter((turn) => turn.content);
+
+  const lastUserInHistory = turns.length && turns[turns.length - 1].role === 'user';
+  if (userText && !lastUserInHistory) {
+    turns.push({ role: 'user', content: String(userText) });
   }
-  if (userText) {
-    messages.push({ role: 'user', content: String(userText) });
-  } else if (history.length === 0) {
+
+  for (const turn of turns.slice(-40)) messages.push(turn);
+
+  if (turns.length === 0) {
     messages.push({ role: 'user', content: 'Начни диалог: поздоровайся по-немецки и задай первый вопрос по теме.' });
   }
   return messages;

@@ -156,7 +156,7 @@ app.post('/api/practice/reply', async (req, res) => {
   if (!ai.enabled) return res.status(503).json({ error: 'AITUNNEL не настроен' });
 
   const history = Array.isArray(req.body?.history)
-    ? req.body.history.slice(-16).map((turn) => ({
+    ? req.body.history.slice(-40).map((turn) => ({
         role: turn?.role === 'ai' ? 'ai' : 'user',
         text: cleanText(turn?.text, 500)
       })).filter((turn) => turn.text)
