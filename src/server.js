@@ -12,7 +12,8 @@ import swaggerUi from 'swagger-ui-express';
 import { JsonStore } from './store.js';
 import { authMiddleware, issueTeacherToken, randomCode, randomPin, randomToken, verifyTeacherToken } from './auth.js';
 import { AiService } from './ai.js';
-import { TtsService, createScribeToken } from './tts.js';
+import { TtsService } from './tts.js';
+import { SttService } from './stt.js';
 import { curriculum, getLesson } from './curriculum.js';
 import { openapi } from './openapi.js';
 
@@ -45,6 +46,14 @@ const tts = new TtsService({
   model: process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5',
   outputFormat: process.env.ELEVENLABS_TTS_OUTPUT || 'mp3_44100_128',
   prefetchCount: process.env.TTS_PREFETCH_COUNT || 2
+});
+
+const stt = new SttService({
+  apiKey: process.env.AITUNNEL_STT_API_KEY || process.env.AITUNNEL_API_KEY,
+  baseUrl: process.env.AITUNNEL_STT_BASE_URL || process.env.AITUNNEL_BASE_URL,
+  model: process.env.AITUNNEL_STT_MODEL || 'whisper-1',
+  language: process.env.AITUNNEL_STT_LANGUAGE || 'de',
+  timeoutMs: process.env.AITUNNEL_STT_TIMEOUT_MS || 30000
 });
 
 const app = express();
@@ -90,7 +99,8 @@ app.get('/health', (_req, res) => {
     ok: true,
     service: 'german-live-classroom',
     aitunnel: ai.enabled,
-    elevenlabsStt: Boolean(process.env.ELEVENLABS_API_KEY),
+    stt: stt.enabled,
+    sttModel: stt.model,
     elevenlabsTts: tts.enabled,
     model: ai.model,
     now: new Date().toISOString()
@@ -101,7 +111,9 @@ app.get('/api/config', (_req, res) => {
   res.json({
     model: ai.model,
     aitunnelEnabled: ai.enabled,
-    elevenlabsSttEnabled: Boolean(process.env.ELEVENLABS_API_KEY),
+    sttEnabled: stt.enabled,
+    sttModel: stt.model,
+    sttProvider: 'aitunnel-whisper',
     elevenlabsTtsEnabled: tts.enabled,
     ttsModel: tts.model,
     demoMode: !ai.enabled || !tts.enabled,
@@ -252,22 +264,39 @@ app.post('/api/ai/transform', requireTeacher, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post('/api/elevenlabs/scribe-token', async (req, res) => {
-  const roomCode = normalizeCode(req.body?.roomCode);
-  const bearer = getBearer(req);
-  const session = store.getSession(roomCode);
-  const teacherAuthorized = Boolean(session && verifyTeacherToken(bearer, sessionSecret));
-  const studentAuthorized = Boolean(session && bearer === session.studentToken);
-  if (!session || session.status !== 'active' || (!teacherAuthorized && !studentAuthorized)) {
-    return res.status(401).json({ error: 'unauthorized' });
+app.post(
+  '/api/stt/transcribe',
+  express.raw({ type: () => true, limit: '25mb' }),
+  async (req, res) => {
+    const roomCode = normalizeCode(req.query?.room || req.get('x-room-code'));
+    const bearer = getBearer(req);
+    const session = store.getSession(roomCode);
+    const teacherAuthorized = Boolean(session && verifyTeacherToken(bearer, sessionSecret));
+    const studentAuthorized = Boolean(session && bearer === session.studentToken);
+    if (!session || session.status !== 'active' || (!teacherAuthorized && !studentAuthorized)) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    if (!stt.enabled) {
+      return res.status(503).json({ error: 'STT не настроен: задайте AITUNNEL_API_KEY' });
+    }
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) {
+      return res.status(400).json({ error: 'Пустая аудиозапись' });
+    }
+    try {
+      const lesson = getLesson(session.lessonId);
+      const prompt = (lesson?.vocabulary || []).slice(0, 40).join(', ');
+      const text = await stt.transcribe({
+        buffer,
+        mimeType: req.get('content-type') || 'audio/webm',
+        prompt
+      });
+      res.json({ text, role: teacherAuthorized ? 'teacher' : 'student', model: stt.model });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
   }
-  try {
-    const token = await createScribeToken(process.env.ELEVENLABS_API_KEY);
-    res.json({ token, role: teacherAuthorized ? 'teacher' : 'student' });
-  } catch (error) {
-    res.status(503).json({ error: error.message });
-  }
-});
+);
 
 app.get('/api/audio/:playToken', async (req, res, next) => {
   try {

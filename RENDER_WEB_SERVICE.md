@@ -63,12 +63,34 @@ AITUNNEL_API_KEY=<ключ AITUNNEL>
 AITUNNEL_BASE_URL=https://api.aitunnel.ru/v1
 AITUNNEL_MODEL=gpt-5.4-mini
 AITUNNEL_REASONING_EFFORT=none
+AITUNNEL_STT_MODEL=whisper-1
 ELEVENLABS_API_KEY=<ключ ElevenLabs>
 ELEVENLABS_VOICE_ID=<ID немецкого голоса>
 ELEVENLABS_TTS_MODEL=eleven_flash_v2_5
 ```
 
 `gpt-5.5-mini` сейчас не опубликован как отдельный ID в документации AITUNNEL. Для быстрого режима используйте `gpt-5.4-mini`; для максимального качества — `gpt-5.5`.
+
+### Распознавание речи (STT) — AITUNNEL Whisper
+
+Микрофоны преподавателя и ученика распознаются через **AITUNNEL Whisper**
+(эндпоинт `POST /v1/audio/transcriptions`, OpenAI-совместимый). Отдельный ключ
+не нужен — используется тот же `AITUNNEL_API_KEY`. Браузер записывает короткие
+фрагменты речи и по паузе отправляет их на наш сервер, а сервер проксирует их в
+AITUNNEL, поэтому ключ не попадает в браузер.
+
+Модель задаётся переменной `AITUNNEL_STT_MODEL` (по умолчанию `whisper-1`).
+Доступные варианты у AITUNNEL: `whisper-1`, `whisper-large-v3`,
+`whisper-large-v3-turbo`, `gpt-4o-transcribe`. Для лучшего качества по-немецки
+можно поставить `whisper-large-v3-turbo`.
+
+Необязательные переменные: `AITUNNEL_STT_LANGUAGE` (по умолчанию `de`),
+`AITUNNEL_STT_TIMEOUT_MS` (по умолчанию `30000`), а также
+`AITUNNEL_STT_API_KEY` / `AITUNNEL_STT_BASE_URL`, если STT нужно направить на
+отдельный ключ или адрес.
+
+ElevenLabs теперь используется **только для озвучивания (TTS)**, распознавание
+речи через ElevenLabs Scribe больше не применяется.
 
 ## 4. Persistent Disk
 
@@ -104,7 +126,7 @@ https://<service>.onrender.com/api-docs
 
 - `ok: true`;
 - `aitunnel: true`;
-- `elevenlabsStt: true`;
+- `stt: true` (распознавание речи через AITUNNEL Whisper);
 - `elevenlabsTts: true`.
 
 ## 6. Первый урок

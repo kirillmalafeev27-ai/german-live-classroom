@@ -1,8 +1,7 @@
-import { Scribe, RealtimeEvents, CommitStrategy } from '@elevenlabs/client';
 import {
   api, $, $$, esc, parseList, formatList, toast, setBusy, copyText, formatTime,
   socketAck, makePill, mediaStorageKeys, refreshMicrophoneSelect,
-  microphoneConstraint, startMicrophoneMeter
+  startVoiceCapture, transcribeAudio
 } from './shared.js';
 
 const VARIANTS = [
@@ -37,11 +36,9 @@ const state = {
   scaffoldLevel: 0,
   studentOnline: false,
   sessionEnded: false,
-  teacherScribe: null,
+  teacherCapture: null,
   teacherMicStarted: false,
-  teacherMicMeter: null,
   teacherMicId: localStorage.getItem(mediaStorageKeys.teacherMic) || '',
-  teacherMicRestarting: false,
   teacherCommandText: ''
 };
 
@@ -297,14 +294,14 @@ function renderServiceStatus() {
   if (!state.config) return;
   const entries = [
     ['AITUNNEL', state.config.aitunnelEnabled ? `${state.config.model}` : 'демо'],
-    ['Scribe', state.config.elevenlabsSttEnabled ? 'готов' : 'ручной ввод'],
+    ['Whisper', state.config.sttEnabled ? (state.config.sttModel || 'готов') : 'ручной ввод'],
     ['Голос', state.config.elevenlabsTtsEnabled ? state.config.ttsModel : 'голос браузера']
   ];
   els.serviceStatus.innerHTML = entries.map(([label, value]) => makePill(label, value, value === 'демо' || value === 'ручной ввод' ? 'warn' : 'ok')).join('');
   els.modelStatus.textContent = state.config.aitunnelEnabled ? state.config.model : 'AITUNNEL не настроен — демо-режим';
-  if (!state.config.elevenlabsSttEnabled) {
+  if (!state.config.sttEnabled) {
     els.teacherMicStartButton.disabled = true;
-    els.teacherMicStatus.textContent = 'Scribe не настроен';
+    els.teacherMicStatus.textContent = 'Распознавание речи не настроено';
     els.teacherMicStatus.className = 'status-badge warn';
   }
 }
@@ -678,109 +675,72 @@ async function startTeacherMicrophone() {
     toast('Сначала создайте комнату и дождитесь подключения', 'error');
     return;
   }
-  if (!state.config?.elevenlabsSttEnabled) {
-    toast('ElevenLabs Scribe не настроен', 'error');
+  if (!state.config?.sttEnabled) {
+    toast('Распознавание речи (AITUNNEL Whisper) не настроено', 'error');
     return;
   }
   setBusy(els.teacherMicStartButton, true, 'Запускаем…');
   try {
     state.teacherMicId = els.teacherMicSelect.value || state.teacherMicId;
     localStorage.setItem(mediaStorageKeys.teacherMic, state.teacherMicId);
-    state.teacherMicMeter?.stop();
-    state.teacherMicMeter = await startMicrophoneMeter({
+    state.teacherCapture?.stop();
+    state.teacherCapture = await startVoiceCapture({
       deviceId: state.teacherMicId,
       fill: els.teacherMicMeterFill,
       value: els.teacherMicMeterValue,
       signal: els.teacherMicSignal,
       onDeviceResolved: ({ deviceId }) => {
         if (deviceId) state.teacherMicId = deviceId;
-      }
+      },
+      onState: (phase) => {
+        if (!state.teacherMicStarted) return;
+        if (phase === 'processing') els.teacherMicPartial.textContent = 'Распознаю через Whisper…';
+        else if (phase === 'speaking') els.teacherMicPartial.textContent = 'Слушаю…';
+        else els.teacherMicPartial.textContent = 'Говорите по-немецки…';
+      },
+      onSegment: (blob) => handleTeacherSegment(blob)
     });
     await refreshTeacherMicrophones();
 
-    const result = await api('/api/elevenlabs/scribe-token', {
-      method: 'POST',
-      token: state.token,
-      body: { roomCode: state.room.code, role: 'teacher' }
-    });
-    const keyterms = (getLesson()?.vocabulary || [])
-      .map((item) => String(item).replace(/[.…]/g, '').trim())
-      .filter((item) => item && item.length <= 20)
-      .slice(0, 50);
-
-    const connection = Scribe.connect({
-      token: result.token,
-      modelId: 'scribe_v2_realtime',
-      languageCode: 'de',
-      commitStrategy: CommitStrategy.VAD,
-      vadSilenceThresholdSecs: 0.55,
-      vadThreshold: 0.42,
-      minSpeechDurationMs: 120,
-      minSilenceDurationMs: 220,
-      keyterms,
-      noVerbatim: false,
-      microphone: {
-        deviceId: microphoneConstraint(state.teacherMicId),
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      }
-    });
-
-    connection.on(RealtimeEvents.SESSION_STARTED, () => {
-      state.teacherMicStarted = true;
-      els.teacherMicStartButton.hidden = true;
-      els.teacherMicStopButton.hidden = false;
-      els.teacherMicStatus.textContent = 'Слушаю команду преподавателя';
-      els.teacherMicStatus.className = 'status-badge ok';
-      els.teacherMicPartial.textContent = 'Говорите по-немецки…';
-    });
-    connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      els.teacherMicPartial.textContent = text || 'Говорите по-немецки…';
-      if (text) state.socket?.emit('teacher:mic-partial', { text });
-    });
-    connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      if (!text) return;
-      state.teacherCommandText = text;
-      els.teacherCommandInput.value = text;
-      els.teacherMicPartial.textContent = 'Фраза распознана. Можно исправить и отправить.';
-      state.socket?.emit('teacher:mic-committed', { text }, (response) => {
-        if (!response?.ok) toast(response?.error || 'Не удалось подготовить голос', 'error');
-      });
-      updateTeacherMicSendState();
-    });
-    connection.on(RealtimeEvents.ERROR, (error) => {
-      const message = error?.error || error?.message || 'Ошибка распознавания';
-      els.teacherMicStatus.textContent = message;
-      els.teacherMicStatus.className = 'status-badge error';
-    });
-    connection.on(RealtimeEvents.CLOSE, () => {
-      state.teacherMicStarted = false;
-      els.teacherMicStartButton.hidden = false;
-      els.teacherMicStopButton.hidden = true;
-      if (!state.teacherMicRestarting) {
-        els.teacherMicStatus.textContent = 'Микрофон преподавателя выключен';
-        els.teacherMicStatus.className = 'status-badge muted';
-      }
-    });
-    state.teacherScribe = connection;
+    state.teacherMicStarted = true;
+    els.teacherMicStartButton.hidden = true;
+    els.teacherMicStopButton.hidden = false;
+    els.teacherMicStatus.textContent = 'Слушаю команду преподавателя';
+    els.teacherMicStatus.className = 'status-badge ok';
+    els.teacherMicPartial.textContent = 'Говорите по-немецки…';
   } catch (error) {
-    state.teacherMicMeter?.stop();
-    state.teacherMicMeter = null;
+    state.teacherCapture?.stop();
+    state.teacherCapture = null;
     toast(`Не удалось включить микрофон преподавателя: ${error.message}`, 'error', 6000);
   } finally {
     setBusy(els.teacherMicStartButton, false);
   }
 }
 
+async function handleTeacherSegment(blob) {
+  try {
+    const text = await transcribeAudio(blob, { token: state.token, roomCode: state.room?.code });
+    if (!text) {
+      if (state.teacherMicStarted) els.teacherMicPartial.textContent = 'Не расслышал. Повторите, пожалуйста.';
+      return;
+    }
+    state.teacherCommandText = text;
+    els.teacherCommandInput.value = text;
+    els.teacherMicPartial.textContent = 'Фраза распознана. Можно исправить и отправить.';
+    state.socket?.emit('teacher:mic-partial', { text });
+    state.socket?.emit('teacher:mic-committed', { text }, (response) => {
+      if (!response?.ok) toast(response?.error || 'Не удалось подготовить голос', 'error');
+    });
+    updateTeacherMicSendState();
+  } catch (error) {
+    els.teacherMicStatus.textContent = `Ошибка распознавания: ${error.message}`;
+    els.teacherMicStatus.className = 'status-badge error';
+  }
+}
+
 function stopTeacherMicrophone() {
-  try { state.teacherScribe?.close(); } catch {}
-  state.teacherScribe = null;
-  state.teacherMicMeter?.stop();
-  state.teacherMicMeter = null;
+  state.teacherCapture?.stop();
+  state.teacherCapture = null;
   state.teacherMicStarted = false;
   els.teacherMicStartButton.hidden = false;
   els.teacherMicStopButton.hidden = true;

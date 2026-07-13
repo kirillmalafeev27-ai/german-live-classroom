@@ -3,7 +3,7 @@ export const openapi = {
   info: {
     title: 'German Live Classroom API',
     version: '1.1.0',
-    description: 'API for teacher profiles, realtime lesson rooms, AITUNNEL response generation and ElevenLabs speech.'
+    description: 'API for teacher profiles, realtime lesson rooms, AITUNNEL response generation, AITUNNEL Whisper speech-to-text and ElevenLabs text-to-speech.'
   },
   servers: [{ url: '/' }],
   components: {
@@ -55,8 +55,8 @@ export const openapi = {
     '/api/ai/transform': {
       post: { security: [{ teacherBearer: [] }], summary: 'Transform a teacher response using a natural-language instruction', responses: { '200': { description: 'Transformed package' } } }
     },
-    '/api/elevenlabs/scribe-token': {
-      post: { security: [{ teacherBearer: [] }, { studentBearer: [] }], summary: 'Create a single-use realtime Scribe token for teacher or student', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['roomCode'], properties: { roomCode: { type: 'string' }, role: { type: 'string', enum: ['teacher', 'student'] } } } } } }, responses: { '200': { description: 'Token and resolved role' } } }
+    '/api/stt/transcribe': {
+      post: { security: [{ teacherBearer: [] }, { studentBearer: [] }], summary: 'Transcribe a recorded audio segment via AITUNNEL Whisper', parameters: [{ in: 'query', name: 'room', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'audio/webm': {}, 'audio/mp4': {}, 'audio/ogg': {} } }, responses: { '200': { description: 'Recognised text' }, '401': { description: 'Unauthorized' }, '502': { description: 'STT provider error' }, '503': { description: 'STT not configured' } } }
     },
     '/api/audio/{playToken}': {
       get: { summary: 'Stream a teacher-approved German phrase as audio', parameters: [{ in: 'path', name: 'playToken', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } } } }

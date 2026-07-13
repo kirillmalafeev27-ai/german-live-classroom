@@ -1,7 +1,6 @@
-import { Scribe, RealtimeEvents, CommitStrategy } from '@elevenlabs/client';
 import {
   api, $, esc, toast, setBusy, getQuery, storageKeys, mediaStorageKeys,
-  refreshMicrophoneSelect, microphoneConstraint, startMicrophoneMeter
+  refreshMicrophoneSelect, startVoiceCapture, transcribeAudio
 } from './shared.js';
 
 const query = getQuery();
@@ -13,14 +12,13 @@ const state = {
   profile: null,
   config: null,
   socket: null,
-  scribe: null,
+  capture: null,
   micStarted: false,
   currentSpeech: null,
   currentAudio: null,
   playing: false,
   committedHistory: [],
   unlocked: false,
-  micMeter: null,
   selectedMicId: localStorage.getItem(mediaStorageKeys.studentMic) || '',
   micRestarting: false
 };
@@ -166,9 +164,9 @@ function enterLesson() {
   els.listenCard.classList.remove('speaking');
   setConnection('Подключаемся…', 'pending');
   refreshStudentMicrophones();
-  if (!state.config?.elevenlabsSttEnabled) {
+  if (!state.config?.sttEnabled) {
     els.startMicButton.disabled = true;
-    els.micStatus.textContent = 'Scribe не настроен — используйте текстовое поле';
+    els.micStatus.textContent = 'Распознавание речи не настроено — используйте текстовое поле';
     els.micStatus.className = 'status-badge warn';
   }
 }
@@ -223,96 +221,60 @@ async function startMicrophone() {
     state.selectedMicId = els.micSelect.value || state.selectedMicId;
     localStorage.setItem(mediaStorageKeys.studentMic, state.selectedMicId);
 
-    state.micMeter?.stop();
-    state.micMeter = await startMicrophoneMeter({
+    state.capture?.stop();
+    state.capture = await startVoiceCapture({
       deviceId: state.selectedMicId,
       fill: els.micMeterFill,
       value: els.micMeterValue,
       signal: els.micSignal,
       onDeviceResolved: ({ deviceId }) => {
         if (deviceId) state.selectedMicId = deviceId;
-      }
+      },
+      onState: (phase) => {
+        if (!state.micStarted || state.playing) return;
+        if (phase === 'processing') els.liveTranscript.textContent = 'Распознаю…';
+        else if (phase === 'speaking') els.liveTranscript.textContent = 'Слушаю…';
+        else els.liveTranscript.textContent = 'Говорите…';
+      },
+      onSegment: (blob) => handleStudentSegment(blob)
     });
     await refreshStudentMicrophones();
 
-    const result = await api('/api/elevenlabs/scribe-token', {
-      method: 'POST',
-      token: state.token,
-      body: { roomCode: state.roomCode, role: 'student' }
-    });
-    const keyterms = (state.lesson?.vocabulary || [])
-      .map((item) => String(item).replace(/[.…]/g, '').trim())
-      .filter((item) => item && item.length <= 20)
-      .slice(0, 50);
-
-    const connection = Scribe.connect({
-      token: result.token,
-      modelId: 'scribe_v2_realtime',
-      languageCode: 'de',
-      commitStrategy: CommitStrategy.VAD,
-      vadSilenceThresholdSecs: 0.65,
-      vadThreshold: 0.45,
-      minSpeechDurationMs: 140,
-      minSilenceDurationMs: 250,
-      keyterms,
-      noVerbatim: false,
-      microphone: {
-        deviceId: microphoneConstraint(state.selectedMicId),
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      }
-    });
-
-    connection.on(RealtimeEvents.SESSION_STARTED, () => {
-      state.micStarted = true;
-      els.startMicButton.hidden = true;
-      els.stopMicButton.hidden = false;
-      els.micStatus.textContent = 'Микрофон слушает немецкую речь';
-      els.micStatus.className = 'status-badge ok';
-      els.liveTranscript.textContent = 'Говорите…';
-    });
-    connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      els.liveTranscript.textContent = text || 'Говорите…';
-      if (text) state.socket.emit('student:partial', { text });
-    });
-    connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      if (!text || state.playing) return;
-      commitText(text);
-    });
-    connection.on(RealtimeEvents.ERROR, (error) => {
-      const message = error?.error || error?.message || 'Ошибка распознавания';
-      els.micStatus.textContent = message;
-      els.micStatus.className = 'status-badge error';
-    });
-    connection.on(RealtimeEvents.CLOSE, () => {
-      state.micStarted = false;
-      els.startMicButton.hidden = false;
-      els.stopMicButton.hidden = true;
-      if (!state.playing && !state.micRestarting) {
-        els.micStatus.textContent = 'Микрофон остановлен';
-        els.micStatus.className = 'status-badge muted';
-      }
-    });
-
-    state.scribe = connection;
+    state.micStarted = true;
+    els.startMicButton.hidden = true;
+    els.stopMicButton.hidden = false;
+    els.micStatus.textContent = 'Микрофон слушает немецкую речь';
+    els.micStatus.className = 'status-badge ok';
+    els.liveTranscript.textContent = 'Говорите…';
   } catch (error) {
-    state.micMeter?.stop();
-    state.micMeter = null;
+    state.capture?.stop();
+    state.capture = null;
     toast(`Не удалось включить микрофон: ${error.message}`, 'error', 6000);
   } finally {
     setBusy(els.startMicButton, false);
   }
 }
 
+async function handleStudentSegment(blob) {
+  if (state.playing) return;
+  try {
+    const text = await transcribeAudio(blob, { token: state.token, roomCode: state.roomCode });
+    if (!text || state.playing) {
+      if (state.micStarted && !state.playing) els.liveTranscript.textContent = 'Говорите…';
+      return;
+    }
+    els.liveTranscript.textContent = text;
+    state.socket?.emit('student:partial', { text });
+    commitText(text);
+  } catch (error) {
+    els.micStatus.textContent = `Ошибка распознавания: ${error.message}`;
+    els.micStatus.className = 'status-badge error';
+  }
+}
+
 function stopMicrophone() {
-  try { state.scribe?.close(); } catch {}
-  state.scribe = null;
-  state.micMeter?.stop();
-  state.micMeter = null;
+  state.capture?.stop();
+  state.capture = null;
   state.micStarted = false;
   els.startMicButton.hidden = false;
   els.stopMicButton.hidden = true;
@@ -356,7 +318,7 @@ async function playSpeech(payload, rate = 1) {
   if (!payload?.text) return;
   stopCurrentAudio();
   state.playing = true;
-  muteScribe(true);
+  state.capture?.pause();
   els.listenCard.classList.add('speaking');
   els.listenState.textContent = payload.source === 'teacher_mic' ? 'Слушайте команду…' : 'Слушайте…';
 
@@ -383,7 +345,7 @@ async function playSpeech(payload, rate = 1) {
     state.playing = false;
     state.currentAudio = null;
     els.listenCard.classList.remove('speaking');
-    setTimeout(() => muteScribe(false), 220);
+    setTimeout(() => state.capture?.resume(), 220);
   }
 }
 
@@ -408,14 +370,6 @@ function stopCurrentAudio() {
     state.currentAudio.currentTime = 0;
   }
   if ('speechSynthesis' in window) speechSynthesis.cancel();
-}
-
-function muteScribe(muted) {
-  if (!state.scribe || !state.micStarted) return;
-  try {
-    if (muted && !state.scribe.isMuted) state.scribe.mute();
-    if (!muted && state.scribe.isMuted) state.scribe.unmute();
-  } catch {}
 }
 
 function replay(rate, action) {
