@@ -59,6 +59,7 @@ a { color: inherit; }
 
 .field { display: grid; gap: 7px; }
 .field > span, .field > label { font-size: 13px; color: #455149; font-weight: 750; }
+.field-hint { color: var(--muted); font-size: 11px; line-height: 1.4; }
 input, textarea, select {
   width: 100%; border: 1px solid #d7ddd6; background: #fbfcfa; color: var(--ink); border-radius: 12px; padding: 11px 12px; outline: none; transition: border-color .12s, box-shadow .12s, background .12s;
 }
@@ -182,6 +183,9 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 .room-url { min-width: 0; }
 .room-status-row { display: flex; gap: 7px; flex-wrap: wrap; }
 .live-card { padding: 20px; }
+.sentence-builder { margin-top: 12px; padding: 13px; border: 1px solid #d7e4d2; border-radius: 14px; background: #f7fbf4; display: grid; gap: 10px; }
+.sentence-builder textarea { min-height: 62px; background: #fff; }
+.sentence-builder .secondary { justify-self: start; }
 .partial-wrap { margin-bottom: 12px; padding: 11px 13px; min-height: 46px; border-radius: 12px; border: 1px dashed #cbd5ca; background: #fafbf9; }
 .partial-wrap small { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
 .partial-transcript { color: #69746c; font-style: italic; }
@@ -351,4 +355,18 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
   .microphone-device-row { grid-template-columns: 1fr; }
   .teacher-mic-card .card-head { flex-direction: column; }
   .teacher-direct-speak { font-size: 13px; }
+}
+
+/* ---------- Self-study practice (reuses the student panel) ---------- */
+.practice-setup { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.practice-setup .setup-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.practice-setup .setup-row .field { flex: 1 1 180px; }
+.practice-setup .setup-row .primary { min-height: 48px; padding: 0 22px; }
+.practice-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.practice-meta b { color: var(--ink); }
+.practice-correction { margin-top: 10px; color: var(--violet); font-size: 14px; font-weight: 800; }
+.practice-hint { margin-top: 12px; background: #fff6e2; border: 1px solid #f0dca6; border-radius: var(--radius-small); padding: 9px 12px; font-size: 13.5px; color: #8a6410; }
+
+@media (max-width: 640px) {
+  .practice-setup .setup-row .field, .practice-setup .setup-row .primary { flex: 1 1 100%; }
 }

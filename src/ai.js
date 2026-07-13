@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { buildPracticeMessages } from './practice.js';
+import { getEffectiveSentenceRule } from './level-rules.js';
 
 const CandidateSchema = z.object({
   interpretation_ru: z.string().default(''),
@@ -48,33 +50,48 @@ export class AiService {
     return Boolean(this.apiKey);
   }
 
-  async generate({ transcript, profile, lesson, recentTurns = [], action = 'AUTO', scaffoldLevel = 0, teacherInstruction = '' }) {
+  async generate({ transcript, profile, lesson, recentTurns = [], action = 'AUTO', scaffoldLevel = 0, teacherInstruction = '', requiredWords = [] }) {
+    const requestedWords = normalizeRequiredWords(requiredWords);
     if (!this.enabled) {
-      return enrichAndValidate(fallbackCandidate(transcript, scaffoldLevel), profile, lesson);
+      return enrichAndValidate(fallbackCandidate(transcript, scaffoldLevel, requestedWords), profile, lesson, requestedWords);
     }
 
     const system = buildSystemPrompt();
-    const user = buildTurnPrompt({ transcript, profile, lesson, recentTurns, action, scaffoldLevel, teacherInstruction });
+    const user = buildTurnPrompt({ transcript, profile, lesson, recentTurns, action, scaffoldLevel, teacherInstruction, requiredWords: requestedWords });
 
     try {
       const json = await this.requestJson({ system, user, maxTokens: 900 });
       const parsed = CandidateSchema.parse(normalizeCandidate(json));
-      return enrichAndValidate(parsed, profile, lesson);
+      let candidate = enrichAndValidate(parsed, profile, lesson, requestedWords);
+      if (needsLengthRepair(candidate, action)) {
+        try {
+          const repairedJson = await this.requestJson({
+            system,
+            user: `${user}\n\nFIRST_RESULT:\n${JSON.stringify(candidate)}\n\nRepair FIRST_RESULT: main must satisfy SENTENCE_LENGTH and include every REQUIRED_WORDS item. Return the complete JSON package.`,
+            maxTokens: 900
+          });
+          candidate = enrichAndValidate(CandidateSchema.parse(normalizeCandidate(repairedJson)), profile, lesson, requestedWords);
+        } catch (repairError) {
+          console.warn('[AITUNNEL] constraint repair failed:', repairError.message);
+        }
+      }
+      return candidate;
     } catch (error) {
       console.error('[AITUNNEL] generation failed:', error.message);
-      const fallback = fallbackCandidate(transcript, scaffoldLevel);
+      const fallback = fallbackCandidate(transcript, scaffoldLevel, requestedWords);
       fallback.teacher_hint_ru = `AITUNNEL недоступен: ${error.message}`;
-      return enrichAndValidate(fallback, profile, lesson);
+      return enrichAndValidate(fallback, profile, lesson, requestedWords);
     }
   }
 
-  async transform({ currentText, transcript, profile, lesson, instruction, scaffoldLevel = 0, recentTurns = [] }) {
+  async transform({ currentText, transcript, profile, lesson, instruction, scaffoldLevel = 0, recentTurns = [], requiredWords = [] }) {
+    const requestedWords = normalizeRequiredWords(requiredWords);
     if (!this.enabled) {
       return enrichAndValidate({
-        ...fallbackCandidate(transcript, scaffoldLevel),
-        main: currentText || fallbackCandidate(transcript, scaffoldLevel).main,
+        ...fallbackCandidate(transcript, scaffoldLevel, requestedWords),
+        main: currentText || fallbackCandidate(transcript, scaffoldLevel, requestedWords).main,
         teacher_hint_ru: 'Демо-режим: сохранён текущий текст.'
-      }, profile, lesson);
+      }, profile, lesson, requestedWords);
     }
 
     const system = buildSystemPrompt();
@@ -85,20 +102,21 @@ export class AiService {
       recentTurns,
       action: 'TRANSFORM',
       scaffoldLevel,
-      teacherInstruction: instruction
+      teacherInstruction: instruction,
+      requiredWords: requestedWords
     })}\n\nCURRENT_TEACHER_TEXT:\n${currentText}\n\nTransform CURRENT_TEACHER_TEXT according to TEACHER_INSTRUCTION while preserving the pedagogical target. Return the complete JSON package.`;
 
     try {
       const json = await this.requestJson({ system, user, maxTokens: 900 });
       const parsed = CandidateSchema.parse(normalizeCandidate(json));
-      return enrichAndValidate(parsed, profile, lesson);
+      return enrichAndValidate(parsed, profile, lesson, requestedWords);
     } catch (error) {
       console.error('[AITUNNEL] transform failed:', error.message);
       return enrichAndValidate({
-        ...fallbackCandidate(transcript, scaffoldLevel),
+        ...fallbackCandidate(transcript, scaffoldLevel, requestedWords),
         main: currentText,
         teacher_hint_ru: `Не удалось изменить: ${error.message}`
-      }, profile, lesson);
+      }, profile, lesson, requestedWords);
     }
   }
 
@@ -119,7 +137,30 @@ export class AiService {
     }
   }
 
+  async practiceReply({ moduleId, mode, scenario, history = [], userText = '', maxTokens = 500 }) {
+    if (!this.enabled) throw new Error('AITUNNEL не настроен');
+    const messages = buildPracticeMessages({ moduleId, mode, scenario, history, userText });
+    const json = await this.requestChat({ messages, maxTokens, temperature: 0.5 });
+    return {
+      reply_de: String(json?.reply_de || json?.reply || '').trim(),
+      correction: String(json?.correction || '').trim(),
+      hint_ru: String(json?.hint_ru || json?.hint || '').trim(),
+      done: Boolean(json?.done)
+    };
+  }
+
   async requestJson({ system, user, maxTokens }) {
+    return this.requestChat({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      maxTokens,
+      temperature: 0.15
+    });
+  }
+
+  async requestChat({ messages, maxTokens, temperature = 0.15 }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -131,12 +172,9 @@ export class AiService {
         },
         body: JSON.stringify({
           model: this.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user }
-          ],
+          messages,
           response_format: { type: 'json_object' },
-          temperature: 0.15,
+          temperature,
           max_tokens: maxTokens,
           stream: false,
           reasoning: {
@@ -173,6 +211,10 @@ STRICT RULES:
 - If the meaning is clear but grammar is wrong, prefer a natural recast or a short confirmation question.
 - At A0/high sterility, use 2-6 words, one clause, present tense, one communicative goal, no subordinate clauses, no idioms.
 - At sterile A1, use 4-9 words, one short question or sentence.
+- Respect SENTENCE_LENGTH for the "main" field at every CEFR level. Never exceed its maxWords.
+- If REQUIRED_WORDS is non-empty, use every item in "main". Inflect it naturally when grammar requires it; do not merely list the words.
+- REQUIRED_WORDS are explicitly authorized by the teacher: use them even if they are absent from knownWords or appear in an unknown list. They do not count against maxNewWords; maxNewWords applies only to other vocabulary.
+- For REQUESTED_ACTION WORD_SENTENCE, "main" must be exactly one standalone, meaningful German sentence within SENTENCE_LENGTH. A student utterance is optional for this action.
 - Use known words whenever possible. Do not use words listed as unknown or avoid.
 - Do not introduce more new words than maxNewWords.
 - Scaffolding ladder: 0 natural/open; 1 slower/easier; 2 simpler; 3 yes/no; 4 A/B choice; 5 sentence starter; 6 full model for repetition.
@@ -183,15 +225,20 @@ STRICT RULES:
 - "recast" is a corrected version of the student's intended utterance, not an explanation.
 - "continue" advances the conversation without unnecessary correction.
 - Never say "Fast richtig" or give long praise.
+
+TARGETED CORRECTION (very important):
+- If STUDENT_UTTERANCE is already correct and on target, set "main" to a short warm acknowledgement such as "Okay, danke schön!", "Genau, sehr gut!" or "Richtig!" and let "recast" repeat the correct sentence unchanged.
+- If STUDENT_UTTERANCE contains one or more wrong words (the student said a similar but incorrect word, e.g. "Flasche" instead of "Fleisch", or "Esen" instead of "Essen"), correct ONLY those specific words using the pattern "Nicht <falsches Wort>. <richtiges Wort>." — one such pair per wrong word, chained if there are several (e.g. "Nicht Flasche. Fleisch. Nicht Esen. Essen."). Put this in "recast", and use it as "main" when the requested action is correction. Do not rephrase the words the student already said correctly.
 - Return valid JSON only, with all keys listed below.
 
 OUTPUT KEYS:
 interpretation_ru, corrected_student_de, main, simpler, shorter, yes_no, choice, starter, full_model, recast, continue, clarification, expected_answer_de, teacher_hint_ru, keyword, new_words, grammar_used, recommended_scaffold, confidence.`;
 }
 
-function buildTurnPrompt({ transcript, profile, lesson, recentTurns, action, scaffoldLevel, teacherInstruction }) {
+function buildTurnPrompt({ transcript, profile, lesson, recentTurns, action, scaffoldLevel, teacherInstruction, requiredWords = [] }) {
   const lessonVocabulary = lesson?.vocabulary || [];
   const knownWords = unique([...(profile.knownWords || []), ...(profile.learningWords || []), ...lessonVocabulary]);
+  const sentenceLength = getEffectiveSentenceRule(profile.level, profile.maxWords);
   return `STUDENT_UTTERANCE:\n${transcript}\n\nPROFILE:\n${JSON.stringify({
     name: profile.name,
     level: profile.level,
@@ -211,7 +258,7 @@ function buildTurnPrompt({ transcript, profile, lesson, recentTurns, action, sca
     speechActs: lesson?.speechActs || [],
     grammar: lesson?.grammar || [],
     vocabulary: lessonVocabulary
-  })}\n\nRECENT_DIALOGUE:\n${JSON.stringify(recentTurns.slice(-8))}\n\nREQUESTED_ACTION: ${action}\nSCAFFOLD_LEVEL: ${scaffoldLevel}\nTEACHER_INSTRUCTION: ${teacherInstruction || 'none'}\n\nChoose main according to REQUESTED_ACTION and SCAFFOLD_LEVEL, but still return all variants.`;
+  })}\n\nRECENT_DIALOGUE:\n${JSON.stringify(recentTurns.slice(-8))}\n\nREQUESTED_ACTION: ${action}\nSCAFFOLD_LEVEL: ${scaffoldLevel}\nSENTENCE_LENGTH: ${JSON.stringify(sentenceLength)}\nREQUIRED_WORDS: ${JSON.stringify(requiredWords)}\nTEACHER_INSTRUCTION: ${teacherInstruction || 'none'}\n\nChoose main according to REQUESTED_ACTION and SCAFFOLD_LEVEL, but still return all variants. REQUIRED_WORDS and SENTENCE_LENGTH are strict for main.`;
 }
 
 function normalizeCandidate(value) {
@@ -240,7 +287,7 @@ function normalizeCandidate(value) {
   };
 }
 
-function enrichAndValidate(candidate, profile, lesson) {
+function enrichAndValidate(candidate, profile, lesson, requiredWords = []) {
   const normalized = normalizeCandidate(candidate);
   const variants = {
     main: normalized.main,
@@ -255,16 +302,25 @@ function enrichAndValidate(candidate, profile, lesson) {
     clarification: normalized.clarification || normalized.yes_no || normalized.main
   };
   const allowed = new Set(
-    unique([...(profile.knownWords || []), ...(profile.learningWords || []), ...(lesson?.vocabulary || [])])
+    unique([...(profile.knownWords || []), ...(profile.learningWords || []), ...(lesson?.vocabulary || []), ...requiredWords])
       .flatMap(tokenize)
   );
   const unknown = detectNewWords(variants.main, allowed, profile.unknownWords || []);
+  const sentenceLength = getEffectiveSentenceRule(profile.level, profile.maxWords);
+  const wordCount = tokenize(variants.main).length;
+  const requestedWords = normalizeRequiredWords(requiredWords);
+  const missingRequiredWords = requestedWords.filter((word) => !containsRequiredExpression(variants.main, word));
   return {
     ...normalized,
     ...variants,
     new_words: unique([...(normalized.new_words || []), ...unknown]),
-    word_count: tokenize(variants.main).length,
-    exceeds_word_limit: tokenize(variants.main).length > Number(profile.maxWords || 99),
+    word_count: wordCount,
+    sentence_min_words: sentenceLength.minWords,
+    sentence_max_words: sentenceLength.maxWords,
+    within_level_word_range: wordCount >= sentenceLength.minWords && wordCount <= sentenceLength.maxWords,
+    exceeds_word_limit: wordCount > sentenceLength.maxWords,
+    required_words: requestedWords,
+    missing_required_words: missingRequiredWords,
     generated_at: new Date().toISOString()
   };
 }
@@ -279,8 +335,39 @@ function detectNewWords(text, allowed, explicitUnknown) {
   }));
 }
 
-function fallbackCandidate(transcript, scaffoldLevel = 0) {
+function normalizeRequiredWords(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(/[\n,;]/);
+  return unique(items.map((item) => String(item).trim().slice(0, 80)).filter(Boolean)).slice(0, 12);
+}
+
+function needsLengthRepair(candidate, action) {
+  if (candidate.exceeds_word_limit || candidate.missing_required_words?.length) return true;
+  return (action === 'WORD_SENTENCE' || candidate.required_words?.length) && !candidate.within_level_word_range;
+}
+
+function containsRequiredExpression(sentence, expression) {
+  const sentenceTokens = tokenize(sentence).map(normalizeGermanToken);
+  const requiredTokens = tokenize(expression).map(normalizeGermanToken);
+  if (!requiredTokens.length) return true;
+  return requiredTokens.every((required) => sentenceTokens.some((actual) => {
+    if (actual === required) return true;
+    if (required.length < 4 || actual.length < 4) return false;
+    const stemLength = Math.max(3, Math.min(required.length, actual.length) - 2);
+    return required.slice(0, stemLength) === actual.slice(0, stemLength);
+  }));
+}
+
+function normalizeGermanToken(value) {
+  return String(value || '')
+    .replace(/ä/g, 'a')
+    .replace(/ö/g, 'o')
+    .replace(/ü/g, 'u')
+    .replace(/ß/g, 'ss');
+}
+
+function fallbackCandidate(transcript, scaffoldLevel = 0, requiredWords = []) {
   const cleaned = String(transcript || '').trim().replace(/[.!?]+$/, '');
+  const requestedWords = normalizeRequiredWords(requiredWords);
   const mainByLevel = [
     'Und weiter?',
     'Sag bitte mehr.',
@@ -290,7 +377,9 @@ function fallbackCandidate(transcript, scaffoldLevel = 0) {
     'Ich ...',
     cleaned ? `${cleaned}.` : 'Sag: Ich lerne Deutsch.'
   ];
-  const main = mainByLevel[Math.max(0, Math.min(6, Number(scaffoldLevel)))] || mainByLevel[0];
+  const main = requestedWords.length
+    ? `Heute übe ich ${requestedWords.join(', ')}.`
+    : mainByLevel[Math.max(0, Math.min(6, Number(scaffoldLevel)))] || mainByLevel[0];
   return {
     interpretation_ru: 'Демо-режим без AITUNNEL.',
     corrected_student_de: cleaned ? `${cleaned}.` : '',

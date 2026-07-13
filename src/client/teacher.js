@@ -1,9 +1,9 @@
-import { Scribe, RealtimeEvents, CommitStrategy } from '@elevenlabs/client';
 import {
   api, $, $$, esc, parseList, formatList, toast, setBusy, copyText, formatTime,
   socketAck, makePill, mediaStorageKeys, refreshMicrophoneSelect,
-  microphoneConstraint, startMicrophoneMeter
+  startVoiceCapture, transcribeAudio
 } from './shared.js';
+import { getEffectiveSentenceRule, getLevelMaxWords, getLevelSentenceRule } from '../level-rules.js';
 
 const VARIANTS = [
   ['main', 'Основной'],
@@ -37,11 +37,9 @@ const state = {
   scaffoldLevel: 0,
   studentOnline: false,
   sessionEnded: false,
-  teacherScribe: null,
+  teacherCapture: null,
   teacherMicStarted: false,
-  teacherMicMeter: null,
   teacherMicId: localStorage.getItem(mediaStorageKeys.teacherMic) || '',
-  teacherMicRestarting: false,
   teacherCommandText: ''
 };
 
@@ -91,6 +89,7 @@ function cacheElements() {
     profileLevel: $('#profileLevel'),
     profileSterility: $('#profileSterility'),
     profileMaxWords: $('#profileMaxWords'),
+    profileWordLimitHint: $('#profileWordLimitHint'),
     profileMaxNewWords: $('#profileMaxNewWords'),
     lessonSelect: $('#lessonSelect'),
     lessonDetails: $('#lessonDetails'),
@@ -119,6 +118,9 @@ function cacheElements() {
     partialTranscript: $('#partialTranscript'),
     transcriptInput: $('#transcriptInput'),
     teacherInstruction: $('#teacherInstruction'),
+    requiredWordsInput: $('#requiredWordsInput'),
+    requiredWordsHint: $('#requiredWordsHint'),
+    generateSentenceButton: $('#generateSentenceButton'),
     generateButton: $('#generateButton'),
     aiStatus: $('#aiStatus'),
     interpretation: $('#interpretation'),
@@ -155,6 +157,8 @@ function bindStaticEvents() {
   els.newProfileButton.addEventListener('click', () => editProfile(null));
   els.deleteProfileButton.addEventListener('click', deleteCurrentProfile);
   els.profileForm.addEventListener('submit', saveProfile);
+  els.profileLevel.addEventListener('change', applyLevelWordLimit);
+  els.profileMaxWords.addEventListener('input', renderLevelWordLimitHint);
   els.lessonSelect.addEventListener('change', () => {
     state.selectedLessonId = Number(els.lessonSelect.value || 1);
     renderLessonDetails();
@@ -166,6 +170,8 @@ function bindStaticEvents() {
     await copyText(els.roomStudentUrl.value);
     toast('Ссылка ученика скопирована', 'success');
   });
+  els.requiredWordsInput.addEventListener('input', renderRequiredWordsHint);
+  els.generateSentenceButton.addEventListener('click', () => generate('WORD_SENTENCE'));
   els.generateButton.addEventListener('click', () => generate('AUTO'));
   els.speakButton.addEventListener('click', () => speak(1));
   els.slowerSpeakButton.addEventListener('click', () => speak(0.76));
@@ -297,14 +303,14 @@ function renderServiceStatus() {
   if (!state.config) return;
   const entries = [
     ['AITUNNEL', state.config.aitunnelEnabled ? `${state.config.model}` : 'демо'],
-    ['Scribe', state.config.elevenlabsSttEnabled ? 'готов' : 'ручной ввод'],
+    ['Whisper', state.config.sttEnabled ? (state.config.sttModel || 'готов') : 'ручной ввод'],
     ['Голос', state.config.elevenlabsTtsEnabled ? state.config.ttsModel : 'голос браузера']
   ];
   els.serviceStatus.innerHTML = entries.map(([label, value]) => makePill(label, value, value === 'демо' || value === 'ручной ввод' ? 'warn' : 'ok')).join('');
   els.modelStatus.textContent = state.config.aitunnelEnabled ? state.config.model : 'AITUNNEL не настроен — демо-режим';
-  if (!state.config.elevenlabsSttEnabled) {
+  if (!state.config.sttEnabled) {
     els.teacherMicStartButton.disabled = true;
-    els.teacherMicStatus.textContent = 'Scribe не настроен';
+    els.teacherMicStatus.textContent = 'Распознавание речи не настроено';
     els.teacherMicStatus.className = 'status-badge warn';
   }
 }
@@ -342,7 +348,7 @@ function editProfile(profile) {
   els.profileName.value = profile?.name || '';
   els.profileLevel.value = profile?.level || 'A0';
   els.profileSterility.value = profile?.sterility || 'high';
-  els.profileMaxWords.value = profile?.maxWords ?? 6;
+  els.profileMaxWords.value = profile?.maxWords ?? getLevelMaxWords(els.profileLevel.value);
   els.profileMaxNewWords.value = profile?.maxNewWords ?? 0;
   state.selectedLessonId = Number(profile?.lessonIds?.[0] || state.selectedLessonId || 1);
   els.lessonSelect.value = String(state.selectedLessonId);
@@ -355,9 +361,37 @@ function editProfile(profile) {
   els.avoidInput.value = formatList(profile?.avoid || []);
   els.notesInput.value = profile?.notes || '';
   els.deleteProfileButton.hidden = !profile;
+  renderLevelWordLimitHint();
+  renderRequiredWordsHint();
   renderProfileList();
   renderLessonDetails();
   renderVocabulary();
+}
+
+function applyLevelWordLimit() {
+  els.profileMaxWords.value = String(getLevelMaxWords(els.profileLevel.value));
+  renderLevelWordLimitHint();
+  renderRequiredWordsHint();
+}
+
+function renderLevelWordLimitHint() {
+  const level = els.profileLevel.value || 'A0';
+  const recommended = getLevelSentenceRule(level);
+  const selected = getEffectiveSentenceRule(level, els.profileMaxWords.value);
+  els.profileWordLimitHint.textContent = selected.maxWords === recommended.maxWords
+    ? `${level}: ${recommended.minWords}–${recommended.maxWords} слов`
+    : `${level}: рекомендуется ${recommended.minWords}–${recommended.maxWords}, выбран максимум ${selected.maxWords}`;
+}
+
+function renderRequiredWordsHint() {
+  const requiredWords = parseList(els.requiredWordsInput.value);
+  const level = state.currentProfile?.level || els.profileLevel.value || 'A0';
+  const maxWords = state.currentProfile?.maxWords ?? els.profileMaxWords.value;
+  const rule = getEffectiveSentenceRule(level, maxWords);
+  const requiredCount = countWords(requiredWords.join(' '));
+  els.requiredWordsHint.textContent = requiredWords.length
+    ? `Добавлено: ${requiredWords.length}; минимум ${requiredCount} слов. Для ${level}: ${rule.minWords}–${rule.maxWords} слов.`
+    : `Введите слова или фразы через запятую. Для ${level} предложение будет длиной ${rule.minWords}–${rule.maxWords} слов.`;
 }
 
 function renderLessonOptions() {
@@ -619,6 +653,7 @@ function connectTeacherSocket(roomCode) {
     els.aiStatus.textContent = 'Модель готовит пакет вариантов…';
     els.aiStatus.className = 'ai-status thinking';
     els.generateButton.disabled = true;
+    els.generateSentenceButton.disabled = true;
   });
   state.socket.on('ai:ready', ({ candidate, transcript, selectedText }) => {
     if (transcript) {
@@ -632,6 +667,7 @@ function connectTeacherSocket(roomCode) {
     els.aiStatus.textContent = 'Ответ готов. Выберите фишку или отредактируйте.';
     els.aiStatus.className = 'ai-status ready';
     els.generateButton.disabled = false;
+    els.generateSentenceButton.disabled = false;
   });
   state.socket.on('candidate:selected', ({ text, variant, level }) => {
     state.selectedText = text;
@@ -645,6 +681,7 @@ function connectTeacherSocket(roomCode) {
     els.aiStatus.textContent = error || 'Ошибка генерации';
     els.aiStatus.className = 'ai-status error';
     els.generateButton.disabled = false;
+    els.generateSentenceButton.disabled = false;
   });
   state.socket.on('voice:ready', () => {
     els.speakButton.classList.add('voice-ready');
@@ -678,109 +715,73 @@ async function startTeacherMicrophone() {
     toast('Сначала создайте комнату и дождитесь подключения', 'error');
     return;
   }
-  if (!state.config?.elevenlabsSttEnabled) {
-    toast('ElevenLabs Scribe не настроен', 'error');
+  if (!state.config?.sttEnabled) {
+    toast('Распознавание речи (AITUNNEL Whisper) не настроено', 'error');
     return;
   }
   setBusy(els.teacherMicStartButton, true, 'Запускаем…');
   try {
     state.teacherMicId = els.teacherMicSelect.value || state.teacherMicId;
     localStorage.setItem(mediaStorageKeys.teacherMic, state.teacherMicId);
-    state.teacherMicMeter?.stop();
-    state.teacherMicMeter = await startMicrophoneMeter({
+    state.teacherCapture?.stop();
+    state.teacherCapture = await startVoiceCapture({
       deviceId: state.teacherMicId,
       fill: els.teacherMicMeterFill,
       value: els.teacherMicMeterValue,
       signal: els.teacherMicSignal,
       onDeviceResolved: ({ deviceId }) => {
         if (deviceId) state.teacherMicId = deviceId;
-      }
+      },
+      onState: (phase) => {
+        if (phase === 'processing') els.teacherMicPartial.textContent = '⏳ Распознаю через Whisper…';
+        else if (phase === 'speaking') els.teacherMicPartial.textContent = '🎙 Слышу вас, говорите…';
+        else if (phase === 'empty') els.teacherMicPartial.textContent = '🔇 Звук не пойман — говорите ближе к микрофону.';
+        else els.teacherMicPartial.textContent = state.teacherMicStarted ? 'Говорите по-немецки…' : 'Микрофон выключен.';
+      },
+      onSegment: (blob) => handleTeacherSegment(blob)
     });
     await refreshTeacherMicrophones();
 
-    const result = await api('/api/elevenlabs/scribe-token', {
-      method: 'POST',
-      token: state.token,
-      body: { roomCode: state.room.code, role: 'teacher' }
-    });
-    const keyterms = (getLesson()?.vocabulary || [])
-      .map((item) => String(item).replace(/[.…]/g, '').trim())
-      .filter((item) => item && item.length <= 20)
-      .slice(0, 50);
-
-    const connection = Scribe.connect({
-      token: result.token,
-      modelId: 'scribe_v2_realtime',
-      languageCode: 'de',
-      commitStrategy: CommitStrategy.VAD,
-      vadSilenceThresholdSecs: 0.55,
-      vadThreshold: 0.42,
-      minSpeechDurationMs: 120,
-      minSilenceDurationMs: 220,
-      keyterms,
-      noVerbatim: false,
-      microphone: {
-        deviceId: microphoneConstraint(state.teacherMicId),
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      }
-    });
-
-    connection.on(RealtimeEvents.SESSION_STARTED, () => {
-      state.teacherMicStarted = true;
-      els.teacherMicStartButton.hidden = true;
-      els.teacherMicStopButton.hidden = false;
-      els.teacherMicStatus.textContent = 'Слушаю команду преподавателя';
-      els.teacherMicStatus.className = 'status-badge ok';
-      els.teacherMicPartial.textContent = 'Говорите по-немецки…';
-    });
-    connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      els.teacherMicPartial.textContent = text || 'Говорите по-немецки…';
-      if (text) state.socket?.emit('teacher:mic-partial', { text });
-    });
-    connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (data) => {
-      const text = String(data?.text || '').trim();
-      if (!text) return;
-      state.teacherCommandText = text;
-      els.teacherCommandInput.value = text;
-      els.teacherMicPartial.textContent = 'Фраза распознана. Можно исправить и отправить.';
-      state.socket?.emit('teacher:mic-committed', { text }, (response) => {
-        if (!response?.ok) toast(response?.error || 'Не удалось подготовить голос', 'error');
-      });
-      updateTeacherMicSendState();
-    });
-    connection.on(RealtimeEvents.ERROR, (error) => {
-      const message = error?.error || error?.message || 'Ошибка распознавания';
-      els.teacherMicStatus.textContent = message;
-      els.teacherMicStatus.className = 'status-badge error';
-    });
-    connection.on(RealtimeEvents.CLOSE, () => {
-      state.teacherMicStarted = false;
-      els.teacherMicStartButton.hidden = false;
-      els.teacherMicStopButton.hidden = true;
-      if (!state.teacherMicRestarting) {
-        els.teacherMicStatus.textContent = 'Микрофон преподавателя выключен';
-        els.teacherMicStatus.className = 'status-badge muted';
-      }
-    });
-    state.teacherScribe = connection;
+    state.teacherMicStarted = true;
+    els.teacherMicStartButton.hidden = true;
+    els.teacherMicStopButton.hidden = false;
+    els.teacherMicStatus.textContent = 'Слушаю команду преподавателя';
+    els.teacherMicStatus.className = 'status-badge ok';
+    els.teacherMicPartial.textContent = 'Говорите по-немецки…';
   } catch (error) {
-    state.teacherMicMeter?.stop();
-    state.teacherMicMeter = null;
+    state.teacherCapture?.stop();
+    state.teacherCapture = null;
     toast(`Не удалось включить микрофон преподавателя: ${error.message}`, 'error', 6000);
   } finally {
     setBusy(els.teacherMicStartButton, false);
   }
 }
 
+async function handleTeacherSegment(blob) {
+  try {
+    const text = await transcribeAudio(blob, { token: state.token, roomCode: state.room?.code });
+    if (!text) {
+      els.teacherMicPartial.textContent = '🔇 Не расслышал разборчивую речь (тишина или шум). Повторите.';
+      return;
+    }
+    state.teacherCommandText = text;
+    els.teacherCommandInput.value = text;
+    els.teacherMicPartial.textContent = `✅ Услышал: «${text}» — проверьте и нажмите «Выдать ученику».`;
+    state.socket?.emit('teacher:mic-partial', { text });
+    state.socket?.emit('teacher:mic-committed', { text }, (response) => {
+      if (!response?.ok) toast(response?.error || 'Не удалось подготовить голос', 'error');
+    });
+    updateTeacherMicSendState();
+  } catch (error) {
+    els.teacherMicStatus.textContent = `Ошибка распознавания: ${error.message}`;
+    els.teacherMicStatus.className = 'status-badge error';
+    els.teacherMicPartial.textContent = `⚠️ Ошибка распознавания: ${error.message}`;
+  }
+}
+
 function stopTeacherMicrophone() {
-  try { state.teacherScribe?.close(); } catch {}
-  state.teacherScribe = null;
-  state.teacherMicMeter?.stop();
-  state.teacherMicMeter = null;
+  state.teacherCapture?.stop();
+  state.teacherCapture = null;
   state.teacherMicStarted = false;
   els.teacherMicStartButton.hidden = false;
   els.teacherMicStopButton.hidden = true;
@@ -833,6 +834,8 @@ function restoreTurn(turn) {
   state.selectedText = turn.selectedText || turn.candidate?.main || '';
   state.selectedVariant = turn.selectedVariant || 'main';
   els.transcriptInput.value = state.transcript;
+  els.requiredWordsInput.value = formatList(turn.requiredWords || []);
+  renderRequiredWordsHint();
   if (state.candidate) renderCandidate();
 }
 
@@ -842,20 +845,38 @@ async function generate(action = 'AUTO') {
     return;
   }
   const transcript = els.transcriptInput.value.trim();
-  if (!transcript) {
+  const requiredWords = parseList(els.requiredWordsInput.value).slice(0, 12);
+  const isWordSentence = action === 'WORD_SENTENCE';
+  if (!transcript && !isWordSentence) {
     toast('Введите или дождитесь реплики ученика', 'error');
+    return;
+  }
+  if (isWordSentence && !requiredWords.length) {
+    toast('Добавьте хотя бы одно слово для предложения', 'error');
+    els.requiredWordsInput.focus();
+    return;
+  }
+  const level = state.currentProfile?.level || els.profileLevel.value || 'A0';
+  const rule = getEffectiveSentenceRule(level, state.currentProfile?.maxWords ?? els.profileMaxWords.value);
+  if (countWords(requiredWords.join(' ')) > rule.maxWords) {
+    toast(`Сами заданные слова длиннее лимита ${level} (${rule.maxWords}). Уберите часть слов или выберите другой уровень.`, 'error', 6000);
     return;
   }
   try {
     await socketAck(state.socket, 'teacher:generate', {
       transcript,
       action,
+      requiredWords,
       instruction: els.teacherInstruction.value.trim(),
       scaffoldLevel: state.scaffoldLevel
     });
   } catch (error) {
     toast(error.message, 'error');
   }
+}
+
+function countWords(value) {
+  return String(value || '').match(/[\p{L}\p{M}]+(?:[-'][\p{L}\p{M}]+)*/gu)?.length || 0;
 }
 
 async function runTransform(instruction) {
@@ -882,7 +903,18 @@ function renderCandidate() {
   els.candidateEditor.value = state.selectedText || c.main;
   const newWords = c.new_words?.length ? c.new_words.join(', ') : '0';
   els.candidateMeta.innerHTML = [
-    makePill('Слов', c.word_count ?? String(c.main).trim().split(/\s+/).length, c.exceeds_word_limit ? 'warn' : 'ok'),
+    makePill(
+      'Слов',
+      c.sentence_min_words && c.sentence_max_words
+        ? `${c.word_count} / ${c.sentence_min_words}–${c.sentence_max_words}`
+        : c.word_count ?? String(c.main).trim().split(/\s+/).length,
+      c.exceeds_word_limit || (c.required_words?.length && !c.within_level_word_range) ? 'warn' : 'ok'
+    ),
+    ...(c.required_words?.length ? [makePill(
+      'Заданные слова',
+      c.missing_required_words?.length ? `не вошли: ${c.missing_required_words.join(', ')}` : 'все использованы',
+      c.missing_required_words?.length ? 'warn' : 'ok'
+    )] : []),
     makePill('Новые', newWords, c.new_words?.length ? 'warn' : 'ok'),
     makePill('Грамматика', (c.grammar_used || []).join(', ') || 'знакомая'),
     makePill('Ожидаемый ответ', c.expected_answer_de || '—')

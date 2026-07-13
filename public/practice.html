@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deutsch Live · Тренажёр</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="student-body">
+  <main class="student-shell">
+    <header class="student-head card">
+      <div class="student-title">
+        <div class="brand-mark">DE</div>
+        <div><h1>Тренажёр диалогов</h1><p>Без преподавателя · собеседник — <b>ИИ (ChatGPT-mini)</b></p></div>
+      </div>
+      <div class="student-head-status">
+        <a class="status-badge muted" href="/">← На главную</a>
+        <span id="practiceStatus" class="status-badge pending">Готово</span>
+      </div>
+    </header>
+
+    <section class="card practice-setup">
+      <div class="setup-row">
+        <label class="field"><span>Модуль</span><select id="moduleSelect"></select></label>
+        <label class="field"><span>Режим</span>
+          <select id="modeSelect">
+            <option value="dialog">Диалог по теме</option>
+            <option value="roleplay">Ролевые сценарии</option>
+          </select>
+        </label>
+        <label class="field" id="scenarioField" hidden><span>Сценарий</span><select id="scenarioSelect"></select></label>
+        <button id="startButton" class="primary" type="button">Начать</button>
+      </div>
+      <div id="setupHint" class="practice-meta"></div>
+    </section>
+
+    <section class="mic-card card">
+      <div class="mic-top">
+        <div><span class="eyebrow">Ваша речь</span><h2 style="margin:4px 0 0">Говорите по-немецки</h2></div>
+        <div class="mic-controls">
+          <button id="startMicButton" class="mic-button start" type="button">🎙 Включить микрофон</button>
+          <button id="stopMicButton" class="mic-button stop" type="button" hidden>■ Остановить</button>
+        </div>
+      </div>
+      <div class="microphone-device-row">
+        <label class="field microphone-select-field"><span>Микрофон</span><select id="micSelect"><option value="">Системный микрофон по умолчанию</option></select></label>
+        <div class="audio-level-panel" aria-label="Уровень входящего звука">
+          <div class="audio-level-head"><span id="micSignal" class="mic-signal">Микрофон не активен</span><b id="micMeterValue">0%</b></div>
+          <div class="audio-meter"><div id="micMeterFill" class="audio-meter-fill"></div></div>
+        </div>
+      </div>
+      <div id="liveTranscript" class="live-student-transcript" aria-live="polite">Выберите тему и нажмите «Начать». Потом отвечайте голосом или текстом.</div>
+      <div id="correctionLine" class="practice-correction" lang="de" hidden></div>
+    </section>
+
+    <section id="listenCard" class="listen-card card">
+      <div class="listen-orb">♫</div>
+      <h2 id="listenState">Собеседник ждёт</h2>
+      <p id="listenHint">Сначала слушайте ответ ИИ. Текст можно открыть по кнопке.</p>
+      <div class="student-actions">
+        <button id="repeatButton" class="student-action" type="button">🔁 Повторить</button>
+        <button id="slowerButton" class="student-action" type="button">🐢 Медленнее</button>
+        <button id="revealButton" class="student-action" type="button">Показать текст</button>
+      </div>
+      <div id="revealBox" class="reveal-box" hidden><small>Ответ ИИ</small><b id="revealText" lang="de"></b></div>
+      <div id="hintBox" class="practice-hint" hidden></div>
+    </section>
+
+    <section class="typed-card card">
+      <div class="card-head"><div><span class="eyebrow">Ответить</span><h3>Отправить текстом</h3><p>Работает даже без микрофона.</p></div></div>
+      <form id="typedForm" class="typed-row"><input id="typedInput" lang="de" placeholder="Ich habe Kopfschmerzen."><button id="sendTypedButton" class="secondary" type="submit">Отправить</button></form>
+    </section>
+  </main>
+  <script type="module" src="/assets/practice.js"></script>
+</body>
+</html>

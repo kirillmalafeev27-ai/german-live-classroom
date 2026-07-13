@@ -53,7 +53,7 @@
               <label class="field"><span>Уровень</span><select id="profileLevel"><option>A0</option><option>A1</option><option>A2</option><option>B1</option><option>B2</option><option>C1</option><option>C2</option></select></label>
               <label class="field"><span>Стерильность речи</span><select id="profileSterility"><option value="high">Высокая — только известное</option><option value="medium">Средняя — один новый элемент</option><option value="low">Низкая — естественная речь</option></select></label>
               <div class="grid-2">
-                <label class="field"><span>Макс. слов</span><input id="profileMaxWords" type="number" min="2" max="40" value="6"></label>
+                <label class="field"><span>Макс. слов</span><input id="profileMaxWords" type="number" min="2" max="40" value="6"><small id="profileWordLimitHint" class="field-hint">A0: 2–6 слов</small></label>
                 <label class="field"><span>Новых слов</span><input id="profileMaxNewWords" type="number" min="0" max="8" value="0"></label>
               </div>
             </div>
@@ -148,6 +148,10 @@
             <div class="partial-wrap"><small>Промежуточное распознавание</small><div id="partialTranscript" class="partial-transcript">Ожидаем речь ученика…</div></div>
             <textarea id="transcriptInput" class="transcript-input" lang="de" placeholder="Ich komme Berlin."></textarea>
             <label class="field" style="margin-top:10px"><span>Свободная инструкция модели</span><input id="teacherInstruction" placeholder="Например: спроси о месте жительства, без нового слова"></label>
+            <div class="sentence-builder">
+              <label class="field"><span>Слова для предложения</span><textarea id="requiredWordsInput" rows="2" lang="de" placeholder="например: heute, einkaufen, Brot"></textarea><small id="requiredWordsHint" class="field-hint">Введите слова или фразы через запятую. Модель использует каждое из них в одном предложении.</small></label>
+              <button id="generateSentenceButton" class="secondary" type="button">Составить предложение со словами</button>
+            </div>
             <div class="actions" style="margin-top:10px"><button id="generateButton" class="primary" type="button">Подготовить ответ</button></div>
             <div id="aiStatus" class="ai-status">Ответ появится после реплики ученика.</div>
           </section>

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { getLevelMaxWords } from './level-rules.js';
 
 const DEFAULT_DATA = {
   profiles: [],
@@ -61,7 +62,7 @@ export class JsonStore {
       name: input.name || 'Новый ученик',
       level: input.level || 'A0',
       sterility: input.sterility || 'high',
-      maxWords: Number(input.maxWords || 6),
+      maxWords: Number(input.maxWords ?? getLevelMaxWords(input.level)),
       maxNewWords: Number(input.maxNewWords ?? 0),
       lessonIds: Array.isArray(input.lessonIds) ? input.lessonIds.map(Number) : [1],
       knownWords: cleanArray(input.knownWords),
@@ -94,9 +95,13 @@ export class JsonStore {
     const index = this.data.profiles.findIndex((item) => item.id === id);
     if (index < 0) return null;
     const current = this.data.profiles[index];
+    const profilePatch = pickProfilePatch(patch);
+    if (patch.level !== undefined && patch.maxWords === undefined) {
+      profilePatch.maxWords = getLevelMaxWords(patch.level);
+    }
     const next = {
       ...current,
-      ...pickProfilePatch(patch),
+      ...profilePatch,
       id: current.id,
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString()

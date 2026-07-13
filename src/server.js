@@ -12,8 +12,10 @@ import swaggerUi from 'swagger-ui-express';
 import { JsonStore } from './store.js';
 import { authMiddleware, issueTeacherToken, randomCode, randomPin, randomToken, verifyTeacherToken } from './auth.js';
 import { AiService } from './ai.js';
-import { TtsService, createScribeToken } from './tts.js';
+import { TtsService } from './tts.js';
+import { SttService } from './stt.js';
 import { curriculum, getLesson } from './curriculum.js';
+import { practiceModes, listPracticeScenarios, getScenario } from './practice.js';
 import { openapi } from './openapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +47,14 @@ const tts = new TtsService({
   model: process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5',
   outputFormat: process.env.ELEVENLABS_TTS_OUTPUT || 'mp3_44100_128',
   prefetchCount: process.env.TTS_PREFETCH_COUNT || 2
+});
+
+const stt = new SttService({
+  apiKey: process.env.AITUNNEL_STT_API_KEY || process.env.AITUNNEL_API_KEY,
+  baseUrl: process.env.AITUNNEL_STT_BASE_URL || process.env.AITUNNEL_BASE_URL,
+  model: process.env.AITUNNEL_STT_MODEL || 'whisper-1',
+  language: process.env.AITUNNEL_STT_LANGUAGE || 'de',
+  timeoutMs: process.env.AITUNNEL_STT_TIMEOUT_MS || 30000
 });
 
 const app = express();
@@ -90,7 +100,8 @@ app.get('/health', (_req, res) => {
     ok: true,
     service: 'german-live-classroom',
     aitunnel: ai.enabled,
-    elevenlabsStt: Boolean(process.env.ELEVENLABS_API_KEY),
+    stt: stt.enabled,
+    sttModel: stt.model,
     elevenlabsTts: tts.enabled,
     model: ai.model,
     now: new Date().toISOString()
@@ -101,7 +112,9 @@ app.get('/api/config', (_req, res) => {
   res.json({
     model: ai.model,
     aitunnelEnabled: ai.enabled,
-    elevenlabsSttEnabled: Boolean(process.env.ELEVENLABS_API_KEY),
+    sttEnabled: stt.enabled,
+    sttModel: stt.model,
+    sttProvider: 'aitunnel-whisper',
     elevenlabsTtsEnabled: tts.enabled,
     ttsModel: tts.model,
     demoMode: !ai.enabled || !tts.enabled,
@@ -120,6 +133,74 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/curriculum', (_req, res) => res.json({ lessons: curriculum }));
+
+// ----- Self-study practice (no teacher, no room) -----
+
+app.get('/api/practice/scenarios', (_req, res) => {
+  res.json({
+    modes: practiceModes,
+    scenarios: listPracticeScenarios(),
+    sttEnabled: stt.enabled,
+    ttsEnabled: tts.enabled,
+    aiEnabled: ai.enabled
+  });
+});
+
+app.post('/api/practice/reply', async (req, res) => {
+  const moduleId = Number(req.body?.moduleId);
+  const lesson = getLesson(moduleId);
+  if (!lesson) return res.status(400).json({ error: 'Неизвестный модуль' });
+  const mode = req.body?.mode === 'roleplay' ? 'roleplay' : 'dialog';
+  const scenario = mode === 'roleplay' ? getScenario(moduleId, String(req.body?.scenarioId || '')) : null;
+  if (mode === 'roleplay' && !scenario) return res.status(400).json({ error: 'Неизвестный сценарий' });
+  if (!ai.enabled) return res.status(503).json({ error: 'AITUNNEL не настроен' });
+
+  const history = Array.isArray(req.body?.history)
+    ? req.body.history.slice(-40).map((turn) => ({
+        role: turn?.role === 'ai' ? 'ai' : 'user',
+        text: cleanText(turn?.text, 500)
+      })).filter((turn) => turn.text)
+    : [];
+  const userText = cleanText(req.body?.userText, 500);
+
+  try {
+    const reply = await ai.practiceReply({ moduleId, mode, scenario, history, userText });
+    res.json({ ...reply, model: ai.model });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.post(
+  '/api/practice/transcribe',
+  express.raw({ type: () => true, limit: '25mb' }),
+  async (req, res) => {
+    if (!stt.enabled) return res.status(503).json({ error: 'STT не настроен' });
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) return res.status(400).json({ error: 'Пустая аудиозапись' });
+    try {
+      const text = await stt.transcribe({ buffer, mimeType: req.get('content-type') || 'audio/webm' });
+      res.json({ text });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
+  }
+);
+
+app.post('/api/practice/tts', async (req, res, next) => {
+  const text = cleanText(req.body?.text, 400);
+  if (!text) return res.status(400).json({ error: 'Пустой текст' });
+  if (!tts.enabled) return res.status(503).json({ error: 'Озвучивание не настроено' });
+  try {
+    const buffer = await tts.getBuffer(text);
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(buffer.length),
+      'Cache-Control': 'private, max-age=300'
+    });
+    res.end(buffer);
+  } catch (error) { next(error); }
+});
 
 app.get('/api/profiles', requireTeacher, (_req, res) => {
   res.json({ profiles: store.listProfiles() });
@@ -228,7 +309,8 @@ app.post('/api/ai/generate', requireTeacher, async (req, res, next) => {
       recentTurns: Array.isArray(req.body?.recentTurns) ? req.body.recentTurns : [],
       action: req.body?.action || 'AUTO',
       scaffoldLevel: Number(req.body?.scaffoldLevel || 0),
-      teacherInstruction: String(req.body?.teacherInstruction || '')
+      teacherInstruction: String(req.body?.teacherInstruction || ''),
+      requiredWords: cleanWordList(req.body?.requiredWords)
     });
     res.json({ candidate, model: ai.model });
   } catch (error) { next(error); }
@@ -252,22 +334,36 @@ app.post('/api/ai/transform', requireTeacher, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post('/api/elevenlabs/scribe-token', async (req, res) => {
-  const roomCode = normalizeCode(req.body?.roomCode);
-  const bearer = getBearer(req);
-  const session = store.getSession(roomCode);
-  const teacherAuthorized = Boolean(session && verifyTeacherToken(bearer, sessionSecret));
-  const studentAuthorized = Boolean(session && bearer === session.studentToken);
-  if (!session || session.status !== 'active' || (!teacherAuthorized && !studentAuthorized)) {
-    return res.status(401).json({ error: 'unauthorized' });
+app.post(
+  '/api/stt/transcribe',
+  express.raw({ type: () => true, limit: '25mb' }),
+  async (req, res) => {
+    const roomCode = normalizeCode(req.query?.room || req.get('x-room-code'));
+    const bearer = getBearer(req);
+    const session = store.getSession(roomCode);
+    const teacherAuthorized = Boolean(session && verifyTeacherToken(bearer, sessionSecret));
+    const studentAuthorized = Boolean(session && bearer === session.studentToken);
+    if (!session || session.status !== 'active' || (!teacherAuthorized && !studentAuthorized)) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    if (!stt.enabled) {
+      return res.status(503).json({ error: 'STT не настроен: задайте AITUNNEL_API_KEY' });
+    }
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) {
+      return res.status(400).json({ error: 'Пустая аудиозапись' });
+    }
+    try {
+      const text = await stt.transcribe({
+        buffer,
+        mimeType: req.get('content-type') || 'audio/webm'
+      });
+      res.json({ text, role: teacherAuthorized ? 'teacher' : 'student', model: stt.model });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
   }
-  try {
-    const token = await createScribeToken(process.env.ELEVENLABS_API_KEY);
-    res.json({ token, role: teacherAuthorized ? 'teacher' : 'student' });
-  } catch (error) {
-    res.status(503).json({ error: error.message });
-  }
-});
+);
 
 app.get('/api/audio/:playToken', async (req, res, next) => {
   try {
@@ -291,6 +387,7 @@ app.use(express.static(path.join(rootDir, 'public'), { extensions: ['html'] }));
 app.get('/', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'index.html')));
 app.get('/teacher', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'teacher.html')));
 app.get('/student', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'student.html')));
+app.get('/practice', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'practice.html')));
 
 io.use((socket, next) => {
   const role = socket.handshake.auth?.role;
@@ -367,6 +464,7 @@ io.on('connection', (socket) => {
     const generationSeq = state.generationSeq;
     state.turnId = turnId;
     state.transcript = text;
+    state.requiredWords = [];
     state.partial = '';
     state.status = 'thinking';
     state.candidate = null;
@@ -384,11 +482,16 @@ io.on('connection', (socket) => {
   socket.on('teacher:generate', async (payload, ack = () => {}) => {
     if (role !== 'teacher') return ack({ ok: false, error: 'forbidden' });
     const state = turnState.get(roomCode) || { recentTurns: [], generationSeq: 0 };
-    const transcript = cleanText(payload?.transcript || state.transcript, 1200);
-    if (!transcript) return ack({ ok: false, error: 'Введите реплику ученика' });
+    const action = cleanText(payload?.action || 'AUTO', 40).toUpperCase();
+    const requiredWords = cleanWordList(payload?.requiredWords);
+    const suppliedTranscript = cleanText(payload?.transcript, 1200);
+    const transcript = suppliedTranscript || (action === 'WORD_SENTENCE' ? '' : cleanText(state.transcript, 1200));
+    if (!transcript && action !== 'WORD_SENTENCE') return ack({ ok: false, error: 'Введите реплику ученика' });
+    if (action === 'WORD_SENTENCE' && !requiredWords.length) return ack({ ok: false, error: 'Добавьте слова для предложения' });
     state.generationSeq += 1;
     state.turnId = payload?.turnId || state.turnId || randomToken().slice(0, 12);
     state.transcript = transcript;
+    state.requiredWords = requiredWords;
     state.status = 'thinking';
     turnState.set(roomCode, state);
     io.to(`teacher:${roomCode}`).emit('ai:thinking', { turnId: state.turnId });
@@ -397,16 +500,17 @@ io.on('connection', (socket) => {
       roomCode,
       turnId: state.turnId,
       generationSeq: state.generationSeq,
-      action: payload?.action || 'AUTO',
+      action,
       teacherInstruction: cleanText(payload?.instruction, 1000),
-      scaffoldLevel: Number(payload?.scaffoldLevel ?? session.scaffoldLevel ?? 0)
+      scaffoldLevel: Number(payload?.scaffoldLevel ?? session.scaffoldLevel ?? 0),
+      requiredWords
     });
   });
 
   socket.on('teacher:transform', async (payload, ack = () => {}) => {
     if (role !== 'teacher') return ack({ ok: false, error: 'forbidden' });
     const state = turnState.get(roomCode);
-    if (!state?.transcript) return ack({ ok: false, error: 'Нет реплики ученика' });
+    if (!state?.transcript && !state?.candidate) return ack({ ok: false, error: 'Нет реплики или предложения для изменения' });
     const currentSession = store.getSession(roomCode);
     const currentProfile = store.getProfile(currentSession.profileId);
     const currentLesson = getLesson(currentSession.lessonId);
@@ -419,7 +523,8 @@ io.on('connection', (socket) => {
         lesson: currentLesson,
         instruction: cleanText(payload?.instruction, 1200),
         scaffoldLevel: Number(payload?.scaffoldLevel ?? currentSession.scaffoldLevel ?? 0),
-        recentTurns: state.recentTurns || []
+        recentTurns: state.recentTurns || [],
+        requiredWords: state.requiredWords || []
       });
       state.candidate = candidate;
       state.status = 'ready';
@@ -580,7 +685,7 @@ io.on('connection', (socket) => {
   });
 });
 
-async function generateForRoom({ roomCode, turnId, generationSeq, action, teacherInstruction = '', scaffoldLevel }) {
+async function generateForRoom({ roomCode, turnId, generationSeq, action, teacherInstruction = '', scaffoldLevel, requiredWords = [] }) {
   const session = store.getSession(roomCode);
   if (!session) return;
   const state = turnState.get(roomCode);
@@ -594,11 +699,13 @@ async function generateForRoom({ roomCode, turnId, generationSeq, action, teache
     recentTurns: state.recentTurns || [],
     action,
     scaffoldLevel: Number(scaffoldLevel ?? session.scaffoldLevel ?? 0),
-    teacherInstruction
+    teacherInstruction,
+    requiredWords
   });
   const latest = turnState.get(roomCode);
   if (!latest || latest.generationSeq !== generationSeq || latest.turnId !== turnId) return;
   latest.candidate = candidate;
+  latest.requiredWords = cleanWordList(requiredWords);
   latest.selectedText = selectScaffoldVariant(candidate, Number(scaffoldLevel ?? session.scaffoldLevel ?? 0));
   latest.selectedVariant = 'main';
   latest.status = 'ready';
@@ -607,6 +714,7 @@ async function generateForRoom({ roomCode, turnId, generationSeq, action, teache
     turnId,
     candidate,
     transcript: latest.transcript,
+    requiredWords: latest.requiredWords,
     selectedText: latest.selectedText,
     model: ai.model
   });
@@ -659,6 +767,11 @@ function normalizeCode(value) {
 
 function cleanText(value, max = 1000) {
   return String(value || '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max);
+}
+
+function cleanWordList(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(/[\n,;]/);
+  return [...new Set(items.map((item) => cleanText(item, 80)).filter(Boolean))].slice(0, 12);
 }
 
 function firstKeyword(text) {

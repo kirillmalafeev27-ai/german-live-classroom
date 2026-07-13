@@ -114,16 +114,3 @@ export class TtsService {
     }
   }
 }
-
-export async function createScribeToken(apiKey) {
-  if (!apiKey) throw new Error('ELEVENLABS_API_KEY is not configured');
-  const response = await fetch('https://api.elevenlabs.io/v1/single-use-token/realtime_scribe', {
-    method: 'POST',
-    headers: { 'xi-api-key': apiKey }
-  });
-  const raw = await response.text();
-  if (!response.ok) throw new Error(`ElevenLabs HTTP ${response.status}: ${raw.slice(0, 400)}`);
-  const data = JSON.parse(raw);
-  if (!data.token) throw new Error('ElevenLabs did not return a Scribe token');
-  return data.token;
-}
