@@ -22,21 +22,28 @@ function toast(message, kind = "info", duration = 3e3) {
     setTimeout(() => node.remove(), 220);
   }, duration);
 }
-function setBusy(button, busy, busyLabel = "\u041F\u043E\u0434\u043E\u0436\u0434\u0438\u0442\u0435\u2026") {
-  if (!button) return;
-  if (busy) {
-    button.dataset.originalText = button.textContent;
-    button.textContent = busyLabel;
-    button.disabled = true;
-    button.classList.add("busy");
-  } else {
-    button.textContent = button.dataset.originalText || button.textContent;
-    button.disabled = false;
-    button.classList.remove("busy");
-  }
-}
 function canUseMicrophone() {
   return Boolean(navigator.mediaDevices?.getUserMedia && navigator.mediaDevices?.enumerateDevices);
+}
+async function refreshMicrophoneSelect(select, preferredDeviceId = "") {
+  if (!select) return [];
+  if (!canUseMicrophone()) {
+    select.innerHTML = '<option value="">\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u044B \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u044E\u0442\u0441\u044F</option>';
+    select.disabled = true;
+    return [];
+  }
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === "audioinput");
+  const current = preferredDeviceId || select.value || "";
+  const options = ['<option value="">\u0421\u0438\u0441\u0442\u0435\u043C\u043D\u044B\u0439 \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E</option>'];
+  devices.forEach((device, index) => {
+    const label = device.label || `\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D ${index + 1}`;
+    options.push(`<option value="${esc(device.deviceId)}">${esc(label)}</option>`);
+  });
+  select.innerHTML = options.join("");
+  select.disabled = false;
+  if (current && devices.some((device) => device.deviceId === current)) select.value = current;
+  else select.value = "";
+  return devices;
 }
 function pickRecorderMimeType() {
   const candidates = [
@@ -293,15 +300,16 @@ async function startVoiceCapture({
 var state = {
   lessons: [],
   scenarios: {},
-  modes: [],
   config: { sttEnabled: false, ttsEnabled: false, aiEnabled: false },
   moduleId: 1,
   mode: "dialog",
   scenarioId: "",
   history: [],
+  started: false,
+  busy: false,
   capture: null,
   micOn: false,
-  busy: false,
+  lastAiText: "",
   currentAudio: null
 };
 var els = {};
@@ -316,23 +324,26 @@ async function boot() {
     ]);
     state.lessons = curriculum.lessons || [];
     state.scenarios = practice.scenarios || {};
-    state.modes = practice.modes || [];
     state.config = {
       sttEnabled: Boolean(practice.sttEnabled),
       ttsEnabled: Boolean(practice.ttsEnabled),
       aiEnabled: Boolean(practice.aiEnabled)
     };
     renderModules();
-    onModuleChange();
+    onSetupChange();
+    refreshMics();
     if (!state.config.aiEnabled) {
       els.status.textContent = "AITUNNEL \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D";
       els.status.className = "status-badge warn";
       els.startButton.disabled = true;
     }
-    if (!state.config.sttEnabled) els.micButton.hidden = true;
+    if (!state.config.sttEnabled) {
+      els.startMicButton.disabled = true;
+      els.startMicButton.textContent = "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D";
+    }
     if (!state.config.ttsEnabled) {
-      els.ttsToggle.checked = false;
-      els.ttsToggle.closest(".practice-tts-toggle").hidden = true;
+      els.repeatButton.disabled = true;
+      els.slowerButton.disabled = true;
     }
   } catch (error) {
     els.status.textContent = "\u041E\u0448\u0438\u0431\u043A\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0438";
@@ -343,54 +354,62 @@ async function boot() {
 function cache() {
   els.status = $("#practiceStatus");
   els.moduleSelect = $("#moduleSelect");
-  els.moduleMeta = $("#moduleMeta");
-  els.modeTabs = $("#modeTabs");
-  els.scenarioBlock = $("#scenarioBlock");
-  els.scenarioButtons = $("#scenarioButtons");
+  els.modeSelect = $("#modeSelect");
+  els.scenarioField = $("#scenarioField");
+  els.scenarioSelect = $("#scenarioSelect");
   els.startButton = $("#startButton");
-  els.setupCard = $("#setupCard");
-  els.chatCard = $("#chatCard");
-  els.chatMode = $("#chatMode");
-  els.chatTitle = $("#chatTitle");
-  els.chatGoal = $("#chatGoal");
-  els.chatLog = $("#chatLog");
-  els.hintBar = $("#hintBar");
-  els.chatInput = $("#chatInput");
-  els.sendButton = $("#sendButton");
-  els.resetButton = $("#resetButton");
-  els.micButton = $("#micButton");
-  els.micStopButton = $("#micStopButton");
-  els.micMeterWrap = $("#micMeterWrap");
+  els.setupHint = $("#setupHint");
+  els.startMicButton = $("#startMicButton");
+  els.stopMicButton = $("#stopMicButton");
+  els.micSelect = $("#micSelect");
   els.micSignal = $("#micSignal");
   els.micMeterValue = $("#micMeterValue");
   els.micMeterFill = $("#micMeterFill");
-  els.micLive = $("#micLive");
-  els.ttsToggle = $("#ttsToggle");
+  els.liveTranscript = $("#liveTranscript");
+  els.correctionLine = $("#correctionLine");
+  els.listenState = $("#listenState");
+  els.listenHint = $("#listenHint");
+  els.repeatButton = $("#repeatButton");
+  els.slowerButton = $("#slowerButton");
+  els.revealButton = $("#revealButton");
+  els.revealBox = $("#revealBox");
+  els.revealText = $("#revealText");
+  els.hintBox = $("#hintBox");
+  els.typedForm = $("#typedForm");
+  els.typedInput = $("#typedInput");
+  els.sendTypedButton = $("#sendTypedButton");
 }
 function bind() {
   els.moduleSelect.addEventListener("change", () => {
     state.moduleId = Number(els.moduleSelect.value);
-    onModuleChange();
+    onSetupChange();
   });
-  els.modeTabs.querySelectorAll(".mode-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      state.mode = tab.dataset.mode;
-      els.modeTabs.querySelectorAll(".mode-tab").forEach((t) => t.classList.toggle("active", t === tab));
-      els.scenarioBlock.hidden = state.mode !== "roleplay";
-      updateStartState();
-    });
+  els.modeSelect.addEventListener("change", () => {
+    state.mode = els.modeSelect.value;
+    onSetupChange();
+  });
+  els.scenarioSelect.addEventListener("change", () => {
+    state.scenarioId = els.scenarioSelect.value;
   });
   els.startButton.addEventListener("click", startSession);
-  els.resetButton.addEventListener("click", resetSession);
-  els.sendButton.addEventListener("click", () => sendUser(els.chatInput.value));
-  els.chatInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      sendUser(els.chatInput.value);
+  els.startMicButton.addEventListener("click", startMic);
+  els.stopMicButton.addEventListener("click", stopMic);
+  els.micSelect.addEventListener("change", () => {
+    if (state.micOn) {
+      stopMic();
+      startMic();
     }
   });
-  els.micButton.addEventListener("click", startMic);
-  els.micStopButton.addEventListener("click", stopMic);
+  els.repeatButton.addEventListener("click", () => replay(1));
+  els.slowerButton.addEventListener("click", () => replay(0.75));
+  els.revealButton.addEventListener("click", revealText);
+  els.typedForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = els.typedInput.value.trim();
+    if (!text) return;
+    els.typedInput.value = "";
+    sendUser(text);
+  });
 }
 function renderModules() {
   els.moduleSelect.innerHTML = state.lessons.map((lesson) => `<option value="${lesson.id}">${lesson.id}. ${esc(lesson.title)}</option>`).join("");
@@ -399,81 +418,69 @@ function renderModules() {
 function currentLesson() {
   return state.lessons.find((lesson) => lesson.id === state.moduleId);
 }
-function onModuleChange() {
-  const lesson = currentLesson();
-  if (lesson) {
-    els.moduleMeta.innerHTML = `
-      <div><b>\u0413\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u043A\u0430:</b> ${esc((lesson.grammar || []).join(" \xB7 ")) || "\u2014"}</div>
-      <div><b>\u0422\u0435\u043C\u044B:</b> ${esc((lesson.themes || []).join(" \xB7 ")) || "\u2014"}</div>`;
-  }
-  renderScenarios();
-  updateStartState();
-}
-function renderScenarios() {
-  const list = state.scenarios[String(state.moduleId)] || [];
-  state.scenarioId = list[0]?.id || "";
-  els.scenarioButtons.innerHTML = list.map((sc) => `
-    <button type="button" class="scenario-chip${sc.id === state.scenarioId ? " active" : ""}" data-id="${esc(sc.id)}">
-      <b>${esc(sc.title)}</b>
-      <span>\u0418\u0418: ${esc(sc.aiRole)}</span>
-      <small>${esc(sc.goal)}</small>
-    </button>`).join("");
-  els.scenarioButtons.querySelectorAll(".scenario-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      state.scenarioId = chip.dataset.id;
-      els.scenarioButtons.querySelectorAll(".scenario-chip").forEach((c) => c.classList.toggle("active", c === chip));
-      updateStartState();
-    });
-  });
-}
 function currentScenario() {
   return (state.scenarios[String(state.moduleId)] || []).find((sc) => sc.id === state.scenarioId) || null;
 }
-function updateStartState() {
-  const ok = state.config.aiEnabled && (state.mode === "dialog" || Boolean(currentScenario()));
-  els.startButton.disabled = !ok;
+function onSetupChange() {
+  const lesson = currentLesson();
+  const roleplay = state.mode === "roleplay";
+  els.scenarioField.hidden = !roleplay;
+  if (roleplay) {
+    const list = state.scenarios[String(state.moduleId)] || [];
+    if (!list.some((sc2) => sc2.id === state.scenarioId)) state.scenarioId = list[0]?.id || "";
+    els.scenarioSelect.innerHTML = list.map((sc2) => `<option value="${esc(sc2.id)}">${esc(sc2.title)}</option>`).join("");
+    els.scenarioSelect.value = state.scenarioId;
+  }
+  const sc = currentScenario();
+  if (roleplay && sc) {
+    els.setupHint.innerHTML = `<div><b>\u0418\u0418 \u0438\u0433\u0440\u0430\u0435\u0442:</b> ${esc(sc.aiRole)}. <b>\u0412\u044B:</b> ${esc(sc.userRole)}.</div><div><b>\u0417\u0430\u0434\u0430\u0447\u0430:</b> ${esc(sc.goal)}</div>`;
+  } else if (lesson) {
+    els.setupHint.innerHTML = `<div><b>\u0413\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u043A\u0430:</b> ${esc((lesson.grammar || []).join(" \xB7 ")) || "\u2014"}</div><div><b>\u0422\u0435\u043C\u044B:</b> ${esc((lesson.themes || []).join(" \xB7 ")) || "\u2014"}</div>`;
+  }
+}
+async function refreshMics() {
+  try {
+    await refreshMicrophoneSelect(els.micSelect, els.micSelect.value);
+  } catch {
+    els.micSelect.innerHTML = '<option value="">\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A</option>';
+    els.micSelect.disabled = true;
+  }
 }
 async function startSession() {
+  state.started = true;
   state.history = [];
-  els.chatLog.innerHTML = "";
-  els.hintBar.hidden = true;
+  els.correctionLine.hidden = true;
+  els.revealBox.hidden = true;
+  els.hintBox.hidden = true;
+  els.startButton.textContent = "\u041D\u0430\u0447\u0430\u0442\u044C \u0437\u0430\u043D\u043E\u0432\u043E";
   const lesson = currentLesson();
-  const scenario = currentScenario();
-  els.setupCard.hidden = true;
-  els.chatCard.hidden = false;
-  els.chatMode.textContent = state.mode === "roleplay" ? "\u0420\u043E\u043B\u0435\u0432\u043E\u0439 \u0434\u0438\u0430\u043B\u043E\u0433" : "\u0414\u0438\u0430\u043B\u043E\u0433 \u043F\u043E \u0442\u0435\u043C\u0435";
-  els.chatTitle.textContent = state.mode === "roleplay" && scenario ? scenario.title : `${lesson.id}. ${lesson.title}`;
-  els.chatGoal.textContent = state.mode === "roleplay" && scenario ? `\u0412\u0430\u0448\u0430 \u0440\u043E\u043B\u044C: ${scenario.userRole}. \u0417\u0430\u0434\u0430\u0447\u0430: ${scenario.goal}` : `\u041E\u0442\u0432\u0435\u0447\u0430\u0439\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438, \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044F: ${(lesson.grammar || []).join(", ")}`;
-  if (state.mode === "roleplay" && scenario?.opener) {
-    addMessage("ai", scenario.opener);
-    state.history.push({ role: "ai", text: scenario.opener });
-    maybeSpeak(scenario.opener);
+  const sc = currentScenario();
+  els.liveTranscript.textContent = state.mode === "roleplay" && sc ? `\u0420\u043E\u043B\u044C \u0418\u0418: ${sc.aiRole}. \u041E\u0442\u0432\u0435\u0442\u044C\u0442\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0438\u043B\u0438 \u0442\u0435\u043A\u0441\u0442\u043E\u043C.` : `\u041E\u0442\u0432\u0435\u0447\u0430\u0439\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438, \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044F: ${(lesson?.grammar || []).join(", ")}`;
+  if (state.mode === "roleplay" && sc?.opener) {
+    presentAiTurn(sc.opener, "", "");
+    state.history.push({ role: "ai", text: sc.opener });
   } else {
     await requestReply("");
   }
-  els.chatInput.focus();
-}
-function resetSession() {
-  stopMic();
-  stopAudio();
-  els.chatCard.hidden = true;
-  els.setupCard.hidden = false;
 }
 async function sendUser(text) {
   const value = String(text || "").trim();
   if (!value || state.busy) return;
-  els.chatInput.value = "";
-  addMessage("user", value);
+  if (!state.started) {
+    toast("\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041D\u0430\u0447\u0430\u0442\u044C\xBB", "error");
+    return;
+  }
+  els.liveTranscript.textContent = `\u0412\u044B \u0441\u043A\u0430\u0437\u0430\u043B\u0438: \xAB${value}\xBB`;
+  els.correctionLine.hidden = true;
   state.history.push({ role: "user", text: value });
   await requestReply(value);
 }
 async function requestReply(userText) {
   if (state.busy) return;
   state.busy = true;
-  setBusy(els.sendButton, true, "\u2026");
   els.status.textContent = "\u0418\u0418 \u0434\u0443\u043C\u0430\u0435\u0442\u2026";
   els.status.className = "status-badge pending";
-  const typing = addMessage("ai", "\u2026", true);
+  els.listenState.textContent = "\u0421\u043E\u0431\u0435\u0441\u0435\u0434\u043D\u0438\u043A \u043F\u0435\u0447\u0430\u0442\u0430\u0435\u0442\u2026";
   try {
     const data = await fetchJson("/api/practice/reply", {
       method: "POST",
@@ -485,60 +492,48 @@ async function requestReply(userText) {
         userText
       }
     });
-    typing.remove();
     const reply = data.reply_de || "\u2026";
-    addMessage("ai", reply, false, data.correction);
     state.history.push({ role: "ai", text: reply });
-    if (data.hint_ru) {
-      els.hintBar.hidden = false;
-      els.hintBar.textContent = `\u{1F4A1} ${data.hint_ru}`;
-    } else els.hintBar.hidden = true;
+    presentAiTurn(reply, data.correction, data.hint_ru);
     els.status.textContent = "\u0412\u0430\u0448 \u0445\u043E\u0434";
     els.status.className = "status-badge ok";
-    maybeSpeak(reply);
   } catch (error) {
-    typing.remove();
     els.status.textContent = "\u041E\u0448\u0438\u0431\u043A\u0430";
     els.status.className = "status-badge error";
+    els.listenState.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u043E\u0442\u0432\u0435\u0442";
     toast(error.message, "error");
   } finally {
     state.busy = false;
-    setBusy(els.sendButton, false);
   }
 }
-function addMessage(role, text, temporary = false, correction = "") {
-  const wrap = document.createElement("div");
-  wrap.className = `chat-bubble ${role === "ai" ? "from-ai" : "from-user"}${temporary ? " typing" : ""}`;
-  const body = document.createElement("div");
-  body.className = "bubble-text";
-  body.lang = role === "ai" ? "de" : "";
-  body.textContent = text;
-  wrap.append(body);
-  if (role === "ai" && !temporary && state.config.ttsEnabled) {
-    const play = document.createElement("button");
-    play.className = "bubble-play";
-    play.type = "button";
-    play.textContent = "\u{1F50A}";
-    play.title = "\u041F\u0440\u043E\u0441\u043B\u0443\u0448\u0430\u0442\u044C";
-    play.addEventListener("click", () => speak(text));
-    wrap.append(play);
-  }
+function presentAiTurn(reply, correction, hint) {
+  state.lastAiText = reply;
+  els.listenState.textContent = "\u0421\u043B\u0443\u0448\u0430\u0439\u0442\u0435 \u043E\u0442\u0432\u0435\u0442 \u0418\u0418";
+  els.revealBox.hidden = true;
+  els.revealText.textContent = reply;
   if (correction) {
-    const corr = document.createElement("div");
-    corr.className = "bubble-correction";
-    corr.lang = "de";
-    corr.textContent = `\u270F\uFE0F ${correction}`;
-    wrap.append(corr);
+    els.correctionLine.hidden = false;
+    els.correctionLine.textContent = `\u270F\uFE0F ${correction}`;
   }
-  els.chatLog.append(wrap);
-  els.chatLog.scrollTop = els.chatLog.scrollHeight;
-  return wrap;
+  if (hint) {
+    els.hintBox.hidden = false;
+    els.hintBox.textContent = `\u{1F4A1} ${hint}`;
+  } else {
+    els.hintBox.hidden = true;
+  }
+  speak(reply, 1).finally(() => {
+    els.listenState.textContent = "\u0412\u0430\u0448 \u0445\u043E\u0434 \u2014 \u043E\u0442\u0432\u0435\u0442\u044C\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438";
+  });
 }
-function maybeSpeak(text) {
-  if (els.ttsToggle?.checked && state.config.ttsEnabled) speak(text);
+function revealText() {
+  if (!state.lastAiText) return;
+  els.revealBox.hidden = false;
 }
-async function speak(text) {
-  if (!state.config.ttsEnabled) return;
+function replay(rate) {
+  if (state.lastAiText) speak(state.lastAiText, rate);
+}
+async function speak(text, rate = 1) {
+  if (!state.config.ttsEnabled || !text) return;
   stopAudio();
   try {
     const response = await fetch("/api/practice/tts", {
@@ -546,11 +541,15 @@ async function speak(text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
-    if (!response.ok) throw new Error("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0430\u0443\u0434\u0438\u043E");
+    if (!response.ok) throw new Error("tts");
     const blob = await response.blob();
     const audio = new Audio(URL.createObjectURL(blob));
+    audio.playbackRate = rate;
     state.currentAudio = audio;
-    audio.play().catch(() => {
+    await audio.play();
+    await new Promise((resolve) => {
+      audio.onended = resolve;
+      audio.onerror = resolve;
     });
   } catch {
   }
@@ -564,24 +563,23 @@ function stopAudio() {
 async function startMic() {
   if (state.micOn || !state.config.sttEnabled) return;
   try {
-    els.micMeterWrap.hidden = false;
     state.capture = await startVoiceCapture({
+      deviceId: els.micSelect.value || "",
       fill: els.micMeterFill,
       value: els.micMeterValue,
       signal: els.micSignal,
       onState: (phase) => {
-        if (phase === "processing") els.micLive.textContent = "\u23F3 \u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u044E\u2026";
-        else if (phase === "speaking") els.micLive.textContent = "\u{1F399} \u0421\u043B\u044B\u0448\u0443 \u0432\u0430\u0441\u2026";
-        else if (phase === "empty") els.micLive.textContent = "\u{1F507} \u0417\u0432\u0443\u043A \u043D\u0435 \u043F\u043E\u0439\u043C\u0430\u043D \u2014 \u0433\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u0431\u043B\u0438\u0436\u0435 \u043A \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0443.";
-        else els.micLive.textContent = "\u0413\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438\u2026";
+        if (phase === "processing") els.liveTranscript.textContent = "\u23F3 \u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u044E\u2026";
+        else if (phase === "speaking") els.liveTranscript.textContent = "\u{1F399} \u0421\u043B\u044B\u0448\u0443 \u0432\u0430\u0441\u2026";
+        else if (phase === "empty") els.liveTranscript.textContent = "\u{1F507} \u0417\u0432\u0443\u043A \u043D\u0435 \u043F\u043E\u0439\u043C\u0430\u043D \u2014 \u0433\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u0431\u043B\u0438\u0436\u0435 \u043A \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0443.";
       },
-      onSegment: handleMicSegment
+      onSegment: handleSegment
     });
     state.micOn = true;
-    els.micButton.hidden = true;
-    els.micStopButton.hidden = false;
+    els.startMicButton.hidden = true;
+    els.stopMicButton.hidden = false;
+    await refreshMics();
   } catch (error) {
-    els.micMeterWrap.hidden = true;
     toast(`\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D: ${error.message}`, "error");
   }
 }
@@ -589,21 +587,19 @@ function stopMic() {
   state.capture?.stop();
   state.capture = null;
   state.micOn = false;
-  els.micButton.hidden = !state.config.sttEnabled;
-  els.micStopButton.hidden = true;
-  els.micMeterWrap.hidden = true;
+  els.startMicButton.hidden = false;
+  els.stopMicButton.hidden = true;
 }
-async function handleMicSegment(blob) {
+async function handleSegment(blob) {
   try {
     const text = await transcribeAudio(blob, { path: "/api/practice/transcribe" });
     if (!text) {
-      els.micLive.textContent = "\u{1F507} \u041D\u0435 \u0440\u0430\u0441\u0441\u043B\u044B\u0448\u0430\u043B. \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.";
+      els.liveTranscript.textContent = "\u{1F507} \u041D\u0435 \u0440\u0430\u0441\u0441\u043B\u044B\u0448\u0430\u043B. \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.";
       return;
     }
-    els.micLive.textContent = `\u0412\u044B \u0441\u043A\u0430\u0437\u0430\u043B\u0438: \xAB${text}\xBB`;
     await sendUser(text);
   } catch (error) {
-    els.micLive.textContent = `\u26A0\uFE0F ${error.message}`;
+    els.liveTranscript.textContent = `\u26A0\uFE0F ${error.message}`;
   }
 }
 async function fetchJson(url, { method = "GET", body } = {}) {

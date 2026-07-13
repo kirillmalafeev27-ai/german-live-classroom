@@ -353,45 +353,16 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
   .teacher-direct-speak { font-size: 13px; }
 }
 
-/* ---------- Self-study practice ---------- */
-.practice-shell { display: flex; flex-direction: column; gap: 16px; }
-.practice-setup { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+/* ---------- Self-study practice (reuses the student panel) ---------- */
+.practice-setup { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.practice-setup .setup-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.practice-setup .setup-row .field { flex: 1 1 180px; }
+.practice-setup .setup-row .primary { min-height: 48px; padding: 0 22px; }
 .practice-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .practice-meta b { color: var(--ink); }
-.practice-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.mode-tab { text-align: left; border: 1.5px solid var(--line); background: var(--paper); border-radius: var(--radius-small); padding: 12px 14px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
-.mode-tab b { font-size: 15px; color: var(--ink); }
-.mode-tab span { font-size: 12px; color: var(--muted); }
-.mode-tab.active { border-color: var(--green); background: #f2f8ec; box-shadow: 0 0 0 3px rgba(99,168,59,.10); }
-.practice-scenarios { display: flex; flex-direction: column; gap: 8px; }
-.scenario-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.scenario-chip { text-align: left; border: 1.5px solid var(--line); background: var(--paper); border-radius: var(--radius-small); padding: 11px 13px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
-.scenario-chip b { font-size: 14px; color: var(--ink); }
-.scenario-chip span { font-size: 12px; color: var(--green-dark); font-weight: 700; }
-.scenario-chip small { font-size: 12px; color: var(--muted); }
-.scenario-chip.active { border-color: var(--violet); background: #f7f0fa; box-shadow: 0 0 0 3px rgba(132,60,150,.10); }
-
-.practice-chat { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-.chat-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.chat-goal { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
-.chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; padding: 4px; }
-.chat-bubble { position: relative; max-width: 82%; padding: 11px 14px; border-radius: 16px; font-size: 15px; line-height: 1.45; }
-.chat-bubble .bubble-text { white-space: pre-wrap; }
-.chat-bubble.from-ai { align-self: flex-start; background: #eef4e9; border: 1px solid #d9e8cd; border-bottom-left-radius: 5px; }
-.chat-bubble.from-user { align-self: flex-end; background: var(--green); color: #fff; border-bottom-right-radius: 5px; }
-.chat-bubble.typing { opacity: .6; font-style: italic; }
-.bubble-play { position: absolute; top: 6px; right: -34px; border: 0; background: transparent; font-size: 17px; cursor: pointer; }
-.bubble-correction { margin-top: 7px; padding-top: 7px; border-top: 1px dashed #c9a9d6; color: var(--violet); font-size: 13.5px; font-weight: 700; }
-.chat-hint { background: #fff6e2; border: 1px solid #f0dca6; border-radius: var(--radius-small); padding: 9px 12px; font-size: 13.5px; color: #8a6410; }
-.chat-input-row { display: flex; gap: 8px; align-items: stretch; }
-.chat-input-row #chatInput { flex: 1; min-height: 48px; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 15px; }
-.chat-input-row .mic-button { min-width: 52px; padding: 0 14px; }
-.chat-input-row .primary { padding: 0 20px; }
-.chat-mic-meter { display: flex; flex-direction: column; gap: 6px; background: #f6f8f4; border: 1px solid var(--line); border-radius: var(--radius-small); padding: 10px 12px; }
-.practice-tts-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.practice-correction { margin-top: 10px; color: var(--violet); font-size: 14px; font-weight: 800; }
+.practice-hint { margin-top: 12px; background: #fff6e2; border: 1px solid #f0dca6; border-radius: var(--radius-small); padding: 9px 12px; font-size: 13.5px; color: #8a6410; }
 
 @media (max-width: 640px) {
-  .practice-modes, .scenario-buttons { grid-template-columns: 1fr; }
-  .chat-bubble { max-width: 90%; }
-  .bubble-play { position: static; display: block; margin-top: 6px; }
+  .practice-setup .setup-row .field, .practice-setup .setup-row .primary { flex: 1 1 100%; }
 }
