@@ -15,6 +15,7 @@ import { AiService } from './ai.js';
 import { TtsService } from './tts.js';
 import { SttService } from './stt.js';
 import { curriculum, getLesson } from './curriculum.js';
+import { practiceModes, listPracticeScenarios, getScenario } from './practice.js';
 import { openapi } from './openapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -132,6 +133,74 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/curriculum', (_req, res) => res.json({ lessons: curriculum }));
+
+// ----- Self-study practice (no teacher, no room) -----
+
+app.get('/api/practice/scenarios', (_req, res) => {
+  res.json({
+    modes: practiceModes,
+    scenarios: listPracticeScenarios(),
+    sttEnabled: stt.enabled,
+    ttsEnabled: tts.enabled,
+    aiEnabled: ai.enabled
+  });
+});
+
+app.post('/api/practice/reply', async (req, res) => {
+  const moduleId = Number(req.body?.moduleId);
+  const lesson = getLesson(moduleId);
+  if (!lesson) return res.status(400).json({ error: 'Неизвестный модуль' });
+  const mode = req.body?.mode === 'roleplay' ? 'roleplay' : 'dialog';
+  const scenario = mode === 'roleplay' ? getScenario(moduleId, String(req.body?.scenarioId || '')) : null;
+  if (mode === 'roleplay' && !scenario) return res.status(400).json({ error: 'Неизвестный сценарий' });
+  if (!ai.enabled) return res.status(503).json({ error: 'AITUNNEL не настроен' });
+
+  const history = Array.isArray(req.body?.history)
+    ? req.body.history.slice(-16).map((turn) => ({
+        role: turn?.role === 'ai' ? 'ai' : 'user',
+        text: cleanText(turn?.text, 500)
+      })).filter((turn) => turn.text)
+    : [];
+  const userText = cleanText(req.body?.userText, 500);
+
+  try {
+    const reply = await ai.practiceReply({ moduleId, mode, scenario, history, userText });
+    res.json({ ...reply, model: ai.model });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.post(
+  '/api/practice/transcribe',
+  express.raw({ type: () => true, limit: '25mb' }),
+  async (req, res) => {
+    if (!stt.enabled) return res.status(503).json({ error: 'STT не настроен' });
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) return res.status(400).json({ error: 'Пустая аудиозапись' });
+    try {
+      const text = await stt.transcribe({ buffer, mimeType: req.get('content-type') || 'audio/webm' });
+      res.json({ text });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
+  }
+);
+
+app.post('/api/practice/tts', async (req, res, next) => {
+  const text = cleanText(req.body?.text, 400);
+  if (!text) return res.status(400).json({ error: 'Пустой текст' });
+  if (!tts.enabled) return res.status(503).json({ error: 'Озвучивание не настроено' });
+  try {
+    const buffer = await tts.getBuffer(text);
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(buffer.length),
+      'Cache-Control': 'private, max-age=300'
+    });
+    res.end(buffer);
+  } catch (error) { next(error); }
+});
 
 app.get('/api/profiles', requireTeacher, (_req, res) => {
   res.json({ profiles: store.listProfiles() });
@@ -317,6 +386,7 @@ app.use(express.static(path.join(rootDir, 'public'), { extensions: ['html'] }));
 app.get('/', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'index.html')));
 app.get('/teacher', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'teacher.html')));
 app.get('/student', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'student.html')));
+app.get('/practice', (_req, res) => res.sendFile(path.join(rootDir, 'public', 'practice.html')));
 
 io.use((socket, next) => {
   const role = socket.handshake.auth?.role;

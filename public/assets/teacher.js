@@ -137,8 +137,9 @@ function pickRecorderMimeType() {
   }
   return "";
 }
-async function transcribeAudio(blob, { token = "", roomCode = "" } = {}) {
-  const response = await fetch(`/api/stt/transcribe?room=${encodeURIComponent(roomCode)}`, {
+async function transcribeAudio(blob, { token = "", roomCode = "", path } = {}) {
+  const url = path || `/api/stt/transcribe?room=${encodeURIComponent(roomCode)}`;
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": blob.type || "audio/webm",

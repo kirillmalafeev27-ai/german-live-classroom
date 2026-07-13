@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 await mkdir('public/assets', { recursive: true });
 
 await build({
-  entryPoints: ['src/client/teacher.js', 'src/client/student.js'],
+  entryPoints: ['src/client/teacher.js', 'src/client/student.js', 'src/client/practice.js'],
   bundle: true,
   format: 'esm',
   target: ['es2022'],

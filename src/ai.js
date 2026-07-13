@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { buildPracticeMessages } from './practice.js';
 
 const CandidateSchema = z.object({
   interpretation_ru: z.string().default(''),
@@ -119,7 +120,30 @@ export class AiService {
     }
   }
 
+  async practiceReply({ moduleId, mode, scenario, history = [], userText = '', maxTokens = 500 }) {
+    if (!this.enabled) throw new Error('AITUNNEL не настроен');
+    const messages = buildPracticeMessages({ moduleId, mode, scenario, history, userText });
+    const json = await this.requestChat({ messages, maxTokens, temperature: 0.5 });
+    return {
+      reply_de: String(json?.reply_de || json?.reply || '').trim(),
+      correction: String(json?.correction || '').trim(),
+      hint_ru: String(json?.hint_ru || json?.hint || '').trim(),
+      done: Boolean(json?.done)
+    };
+  }
+
   async requestJson({ system, user, maxTokens }) {
+    return this.requestChat({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      maxTokens,
+      temperature: 0.15
+    });
+  }
+
+  async requestChat({ messages, maxTokens, temperature = 0.15 }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -131,12 +155,9 @@ export class AiService {
         },
         body: JSON.stringify({
           model: this.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user }
-          ],
+          messages,
           response_format: { type: 'json_object' },
-          temperature: 0.15,
+          temperature,
           max_tokens: maxTokens,
           stream: false,
           reasoning: {

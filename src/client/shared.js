@@ -178,9 +178,11 @@ function pickRecorderMimeType() {
 }
 
 // Send a recorded audio segment to the server, which forwards it to AITUNNEL
-// Whisper and returns the recognised text.
-export async function transcribeAudio(blob, { token = '', roomCode = '' } = {}) {
-  const response = await fetch(`/api/stt/transcribe?room=${encodeURIComponent(roomCode)}`, {
+// Whisper and returns the recognised text. Defaults to the room-scoped endpoint;
+// self-study passes a path to the open practice endpoint.
+export async function transcribeAudio(blob, { token = '', roomCode = '', path } = {}) {
+  const url = path || `/api/stt/transcribe?room=${encodeURIComponent(roomCode)}`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': blob.type || 'audio/webm',

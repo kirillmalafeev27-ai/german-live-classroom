@@ -55,6 +55,18 @@ export const openapi = {
     '/api/ai/transform': {
       post: { security: [{ teacherBearer: [] }], summary: 'Transform a teacher response using a natural-language instruction', responses: { '200': { description: 'Transformed package' } } }
     },
+    '/api/practice/scenarios': {
+      get: { summary: 'Self-study modes and per-module role-play scenarios', responses: { '200': { description: 'Modes and scenarios' } } }
+    },
+    '/api/practice/reply': {
+      post: { summary: 'Get the next AI dialogue turn for self-study (AITUNNEL)', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['moduleId', 'mode'], properties: { moduleId: { type: 'integer' }, mode: { type: 'string', enum: ['dialog', 'roleplay'] }, scenarioId: { type: 'string' }, history: { type: 'array', items: { type: 'object' } }, userText: { type: 'string' } } } } } }, responses: { '200': { description: 'reply_de, correction, hint_ru, done' } } }
+    },
+    '/api/practice/transcribe': {
+      post: { summary: 'Transcribe self-study audio via Whisper (no room)', requestBody: { required: true, content: { 'audio/webm': {} } }, responses: { '200': { description: 'Recognised text' } } }
+    },
+    '/api/practice/tts': {
+      post: { summary: 'Voice a German phrase for self-study', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } } } }, responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } } } }
+    },
     '/api/stt/transcribe': {
       post: { security: [{ teacherBearer: [] }, { studentBearer: [] }], summary: 'Transcribe a recorded audio segment via AITUNNEL Whisper', parameters: [{ in: 'query', name: 'room', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'audio/webm': {}, 'audio/mp4': {}, 'audio/ogg': {} } }, responses: { '200': { description: 'Recognised text' }, '401': { description: 'Unauthorized' }, '502': { description: 'STT provider error' }, '503': { description: 'STT not configured' } } }
     },

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deutsch Live · Тренажёр</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="student-body">
+  <main class="student-shell practice-shell">
+    <header class="student-head card">
+      <div class="student-title">
+        <div class="brand-mark">DE</div>
+        <div><h1>Тренажёр диалогов</h1><p>Самостоятельная практика без преподавателя · <b>ChatGPT-mini</b> ведёт диалог</p></div>
+      </div>
+      <div class="student-head-status">
+        <a class="status-badge muted" href="/">← На главную</a>
+        <span id="practiceStatus" class="status-badge pending">Готово</span>
+      </div>
+    </header>
+
+    <section id="setupCard" class="card practice-setup">
+      <div class="card-head"><div><span class="eyebrow">Шаг 1</span><h2 style="margin:4px 0 0">Выберите модуль и режим</h2></div></div>
+
+      <label class="field"><span>Модуль (тема)</span>
+        <select id="moduleSelect"></select>
+      </label>
+      <div id="moduleMeta" class="practice-meta"></div>
+
+      <div class="practice-modes" id="modeTabs">
+        <button type="button" class="mode-tab active" data-mode="dialog">
+          <b>Диалог по теме</b><span>ИИ спрашивает так, чтобы вы использовали нужную грамматику</span>
+        </button>
+        <button type="button" class="mode-tab" data-mode="roleplay">
+          <b>Ролевые сценарии</b><span>ИИ берёт роль (друг, врач, продавец…), вы отвечаете</span>
+        </button>
+      </div>
+
+      <div id="scenarioBlock" class="practice-scenarios" hidden>
+        <span class="eyebrow">Сценарий</span>
+        <div id="scenarioButtons" class="scenario-buttons"></div>
+      </div>
+
+      <button id="startButton" class="primary big-action" type="button">Начать диалог</button>
+    </section>
+
+    <section id="chatCard" class="card practice-chat" hidden>
+      <div class="chat-head">
+        <div>
+          <span class="eyebrow" id="chatMode">Диалог</span>
+          <h2 id="chatTitle" style="margin:4px 0 0">—</h2>
+          <p id="chatGoal" class="chat-goal"></p>
+        </div>
+        <button id="resetButton" class="secondary" type="button">Сменить тему</button>
+      </div>
+
+      <div id="chatLog" class="chat-log" aria-live="polite"></div>
+
+      <div id="hintBar" class="chat-hint" hidden></div>
+
+      <div class="chat-input-row">
+        <button id="micButton" class="mic-button start" type="button" title="Говорить">🎙</button>
+        <button id="micStopButton" class="mic-button stop" type="button" title="Остановить" hidden>■</button>
+        <input id="chatInput" lang="de" placeholder="Antworten Sie auf Deutsch…" autocomplete="off">
+        <button id="sendButton" class="primary" type="button">Отправить</button>
+      </div>
+      <div class="chat-mic-meter" id="micMeterWrap" hidden>
+        <div class="audio-level-head"><span id="micSignal" class="mic-signal">Микрофон не активен</span><b id="micMeterValue">0%</b></div>
+        <div class="audio-meter"><div id="micMeterFill" class="audio-meter-fill"></div></div>
+        <div id="micLive" class="live-student-transcript">Говорите по-немецки…</div>
+      </div>
+      <label class="practice-tts-toggle"><input type="checkbox" id="ttsToggle" checked> Автоматически озвучивать ответы ИИ</label>
+    </section>
+  </main>
+  <script type="module" src="/assets/practice.js"></script>
+</body>
+</html>
