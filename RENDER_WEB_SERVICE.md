@@ -19,24 +19,28 @@
 5. Build Command:
 
 ```bash
-(npm ci || npm ci) && npm run build
+npm ci && npm run build
 ```
-
-Двойной `npm ci` — это защита от редкого сбоя самого npm на CI-раннерах Render
-(`npm error Exit handler never called!`, известный баг npm при обрывах сети во
-время установки). Если первая попытка ломается на середине и оставляет
-`node_modules` неполным (например, без `esbuild`), вторая попытка переустановит
-всё заново перед сборкой. В репозитории также есть `.npmrc` с повторными
-попытками и таймаутами сетевых запросов, что снижает частоту этого сбоя.
-
-Если ошибка всё равно повторяется — в Render сделайте
-**Manual Deploy → Clear build cache & deploy**.
 
 6. Start Command:
 
 ```bash
 npm start
 ```
+
+> **Важно про `package-lock.json`.** Все ссылки `resolved` в lock-файле должны
+> указывать на публичный реестр `https://registry.npmjs.org/`. Если lock-файл
+> был сгенерирован в закрытой корпоративной среде, в него могут попасть URL на
+> внутренний прокси-реестр — тогда `npm ci` на Render зависает навсегда (Render
+> не может достучаться до внутреннего хоста) и падает с
+> `npm error Exit handler never called!`. Проверить:
+>
+> ```bash
+> grep -o '"resolved": "https://[^/]*' package-lock.json | sort -u
+> ```
+>
+> Должен быть только `registry.npmjs.org`. Если нет — пересоберите lock из среды
+> с доступом к публичному npm: `rm -rf node_modules package-lock.json && npm install`.
 
 7. Health Check Path:
 
