@@ -166,9 +166,9 @@ async function startVoiceCapture({
   },
   onState = () => {
   },
-  speechThreshold = 0.018,
+  speechThreshold = 0.02,
   silenceHangoverMs = 850,
-  minSpeechMs = 350,
+  minVoicedMs = 400,
   maxSegmentMs = 15e3
 } = {}) {
   if (!canUseMicrophone()) throw new Error("\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F \u043A \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0443");
@@ -211,17 +211,42 @@ async function startVoiceCapture({
   let paused = false;
   let smoothed = 0;
   let raf = 0;
+  let lastFrameAt = performance.now();
   let recorder = null;
   let chunks = [];
   let recording = false;
-  let segmentStartAt = 0;
+  let voicedMs = 0;
   let lastVoiceAt = 0;
-  let segmentValid = false;
+  let segmentReason = "";
+  let pendingTeardown = false;
+  const teardown = () => {
+    cancelAnimationFrame(raf);
+    try {
+      source.disconnect();
+    } catch {
+    }
+    try {
+      analyser.disconnect();
+    } catch {
+    }
+    stream.getTracks().forEach((item) => item.stop());
+    context.close().catch(() => {
+    });
+    if (fill) {
+      fill.style.transform = "scaleX(0)";
+      fill.parentElement?.classList.remove("receiving");
+    }
+    if (value) value.textContent = "0%";
+    if (signal) {
+      signal.textContent = "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043D\u0435 \u0430\u043A\u0442\u0438\u0432\u0435\u043D";
+      signal.classList.remove("active");
+    }
+  };
   const startSegment = (now) => {
     recording = true;
-    segmentStartAt = now;
+    voicedMs = 0;
     lastVoiceAt = now;
-    segmentValid = false;
+    segmentReason = "";
     chunks = [];
     try {
       recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -235,16 +260,22 @@ async function startVoiceCapture({
       const collected = chunks;
       chunks = [];
       const type = recorder?.mimeType || mimeType || "audio/webm";
-      const shouldEmit = segmentValid && !paused && !stopped;
-      onState("listening");
-      if (!shouldEmit) return;
+      const heardEnough = voicedMs >= minVoicedMs && segmentReason !== "abort";
       const blob = new Blob(collected, { type });
-      if (blob.size < 1200) return;
-      onState("processing");
-      Promise.resolve().then(() => onSegment(blob)).catch(() => {
-      }).finally(() => {
-        if (!recording && !stopped) onState("listening");
-      });
+      const emit = heardEnough && blob.size >= 1200 && !paused;
+      if (emit) {
+        onState("processing");
+        Promise.resolve().then(() => onSegment(blob)).catch(() => {
+        }).finally(() => {
+          if (!recording && !stopped) onState("listening");
+        });
+      } else {
+        onState(segmentReason === "abort" ? "listening" : "empty");
+      }
+      if (pendingTeardown) {
+        pendingTeardown = false;
+        teardown();
+      }
     };
     try {
       recorder.start();
@@ -253,13 +284,21 @@ async function startVoiceCapture({
     }
     onState("speaking");
   };
-  const finishSegment = (valid) => {
+  const finishSegment = (reason) => {
     if (!recording) return;
     recording = false;
-    segmentValid = valid;
+    segmentReason = reason;
     try {
       if (recorder && recorder.state !== "inactive") recorder.stop();
+      else if (pendingTeardown) {
+        pendingTeardown = false;
+        teardown();
+      }
     } catch {
+      if (pendingTeardown) {
+        pendingTeardown = false;
+        teardown();
+      }
     }
   };
   const render = () => {
@@ -283,17 +322,19 @@ async function startVoiceCapture({
       signal.textContent = percent >= 4 ? "\u0417\u0432\u0443\u043A \u043F\u043E\u0441\u0442\u0443\u043F\u0430\u0435\u0442" : "\u041E\u0436\u0438\u0434\u0430\u0435\u043C \u0437\u0432\u0443\u043A";
       signal.classList.toggle("active", percent >= 4);
     }
+    const now = performance.now();
+    const dt = now - lastFrameAt;
+    lastFrameAt = now;
     if (!paused) {
-      const now = performance.now();
       const voiced = rms >= speechThreshold;
       if (voiced) lastVoiceAt = now;
       if (!recording && voiced) {
         startSegment(now);
       } else if (recording) {
-        const duration = now - segmentStartAt;
+        if (voiced) voicedMs += dt;
         const sinceVoice = now - lastVoiceAt;
-        if (duration >= maxSegmentMs) finishSegment(duration >= minSpeechMs);
-        else if (sinceVoice >= silenceHangoverMs) finishSegment(duration - sinceVoice >= minSpeechMs);
+        if (voicedMs >= maxSegmentMs) finishSegment("max");
+        else if (sinceVoice >= silenceHangoverMs) finishSegment("silence");
       }
     }
     raf = requestAnimationFrame(render);
@@ -309,36 +350,25 @@ async function startVoiceCapture({
     pause() {
       if (paused) return;
       paused = true;
-      if (recording) finishSegment(false);
+      if (recording) finishSegment("abort");
     },
     resume() {
       paused = false;
       lastVoiceAt = performance.now();
+      lastFrameAt = performance.now();
+    },
+    // Transcribe whatever has been said so far, then stop listening.
+    flush() {
+      if (recording && voicedMs >= minVoicedMs) finishSegment("silence");
     },
     stop() {
       if (stopped) return;
       stopped = true;
-      if (recording) finishSegment(false);
-      cancelAnimationFrame(raf);
-      try {
-        source.disconnect();
-      } catch {
-      }
-      try {
-        analyser.disconnect();
-      } catch {
-      }
-      stream.getTracks().forEach((item) => item.stop());
-      context.close().catch(() => {
-      });
-      if (fill) {
-        fill.style.transform = "scaleX(0)";
-        fill.parentElement?.classList.remove("receiving");
-      }
-      if (value) value.textContent = "0%";
-      if (signal) {
-        signal.textContent = "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043D\u0435 \u0430\u043A\u0442\u0438\u0432\u0435\u043D";
-        signal.classList.remove("active");
+      if (recording) {
+        pendingTeardown = true;
+        finishSegment(voicedMs >= minVoicedMs ? "silence" : "abort");
+      } else {
+        teardown();
       }
     }
   };
@@ -1002,10 +1032,10 @@ async function startTeacherMicrophone() {
         if (deviceId) state.teacherMicId = deviceId;
       },
       onState: (phase) => {
-        if (!state.teacherMicStarted) return;
-        if (phase === "processing") els.teacherMicPartial.textContent = "\u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u044E \u0447\u0435\u0440\u0435\u0437 Whisper\u2026";
-        else if (phase === "speaking") els.teacherMicPartial.textContent = "\u0421\u043B\u0443\u0448\u0430\u044E\u2026";
-        else els.teacherMicPartial.textContent = "\u0413\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438\u2026";
+        if (phase === "processing") els.teacherMicPartial.textContent = "\u23F3 \u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u044E \u0447\u0435\u0440\u0435\u0437 Whisper\u2026";
+        else if (phase === "speaking") els.teacherMicPartial.textContent = "\u{1F399} \u0421\u043B\u044B\u0448\u0443 \u0432\u0430\u0441, \u0433\u043E\u0432\u043E\u0440\u0438\u0442\u0435\u2026";
+        else if (phase === "empty") els.teacherMicPartial.textContent = "\u{1F507} \u0417\u0432\u0443\u043A \u043D\u0435 \u043F\u043E\u0439\u043C\u0430\u043D \u2014 \u0433\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u0431\u043B\u0438\u0436\u0435 \u043A \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0443.";
+        else els.teacherMicPartial.textContent = state.teacherMicStarted ? "\u0413\u043E\u0432\u043E\u0440\u0438\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438\u2026" : "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D.";
       },
       onSegment: (blob) => handleTeacherSegment(blob)
     });
@@ -1028,12 +1058,12 @@ async function handleTeacherSegment(blob) {
   try {
     const text = await transcribeAudio(blob, { token: state.token, roomCode: state.room?.code });
     if (!text) {
-      if (state.teacherMicStarted) els.teacherMicPartial.textContent = "\u041D\u0435 \u0440\u0430\u0441\u0441\u043B\u044B\u0448\u0430\u043B. \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435, \u043F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430.";
+      els.teacherMicPartial.textContent = "\u{1F507} \u041D\u0435 \u0440\u0430\u0441\u0441\u043B\u044B\u0448\u0430\u043B \u0440\u0430\u0437\u0431\u043E\u0440\u0447\u0438\u0432\u0443\u044E \u0440\u0435\u0447\u044C (\u0442\u0438\u0448\u0438\u043D\u0430 \u0438\u043B\u0438 \u0448\u0443\u043C). \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.";
       return;
     }
     state.teacherCommandText = text;
     els.teacherCommandInput.value = text;
-    els.teacherMicPartial.textContent = "\u0424\u0440\u0430\u0437\u0430 \u0440\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u043D\u0430. \u041C\u043E\u0436\u043D\u043E \u0438\u0441\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0438 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C.";
+    els.teacherMicPartial.textContent = `\u2705 \u0423\u0441\u043B\u044B\u0448\u0430\u043B: \xAB${text}\xBB \u2014 \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u044B\u0434\u0430\u0442\u044C \u0443\u0447\u0435\u043D\u0438\u043A\u0443\xBB.`;
     state.socket?.emit("teacher:mic-partial", { text });
     state.socket?.emit("teacher:mic-committed", { text }, (response) => {
       if (!response?.ok) toast(response?.error || "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u0438\u0442\u044C \u0433\u043E\u043B\u043E\u0441", "error");
@@ -1042,6 +1072,7 @@ async function handleTeacherSegment(blob) {
   } catch (error) {
     els.teacherMicStatus.textContent = `\u041E\u0448\u0438\u0431\u043A\u0430 \u0440\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u0432\u0430\u043D\u0438\u044F: ${error.message}`;
     els.teacherMicStatus.className = "status-badge error";
+    els.teacherMicPartial.textContent = `\u26A0\uFE0F \u041E\u0448\u0438\u0431\u043A\u0430 \u0440\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u0432\u0430\u043D\u0438\u044F: ${error.message}`;
   }
 }
 function stopTeacherMicrophone() {

@@ -231,10 +231,11 @@ async function startMicrophone() {
         if (deviceId) state.selectedMicId = deviceId;
       },
       onState: (phase) => {
-        if (!state.micStarted || state.playing) return;
-        if (phase === 'processing') els.liveTranscript.textContent = 'Распознаю…';
-        else if (phase === 'speaking') els.liveTranscript.textContent = 'Слушаю…';
-        else els.liveTranscript.textContent = 'Говорите…';
+        if (state.playing) return;
+        if (phase === 'processing') els.liveTranscript.textContent = '⏳ Распознаю…';
+        else if (phase === 'speaking') els.liveTranscript.textContent = '🎙 Слышу вас…';
+        else if (phase === 'empty') els.liveTranscript.textContent = '🔇 Звук не пойман — говорите ближе к микрофону.';
+        else if (state.micStarted) els.liveTranscript.textContent = 'Говорите…';
       },
       onSegment: (blob) => handleStudentSegment(blob)
     });
@@ -260,15 +261,18 @@ async function handleStudentSegment(blob) {
   try {
     const text = await transcribeAudio(blob, { token: state.token, roomCode: state.roomCode });
     if (!text || state.playing) {
-      if (state.micStarted && !state.playing) els.liveTranscript.textContent = 'Говорите…';
+      if (state.micStarted && !state.playing) {
+        els.liveTranscript.textContent = '🔇 Не расслышал (тишина или шум). Скажите ещё раз.';
+      }
       return;
     }
-    els.liveTranscript.textContent = text;
+    els.liveTranscript.textContent = `Вы сказали: «${text}»`;
     state.socket?.emit('student:partial', { text });
     commitText(text);
   } catch (error) {
     els.micStatus.textContent = `Ошибка распознавания: ${error.message}`;
     els.micStatus.className = 'status-badge error';
+    els.liveTranscript.textContent = `⚠️ Ошибка распознавания: ${error.message}`;
   }
 }
 
@@ -298,9 +302,14 @@ function commitText(text, done = () => {}) {
   state.committedHistory.push(text);
   state.committedHistory = state.committedHistory.slice(-8);
   els.committedTranscript.innerHTML = state.committedHistory.map((item) => `<span>${esc(item)}</span>`).join('');
-  els.liveTranscript.textContent = 'Отправлено. Преподаватель готовит ответ…';
+  els.liveTranscript.textContent = '📨 Отправляю преподавателю…';
   state.socket.emit('student:committed', { text }, (response) => {
-    if (!response?.ok) toast(response?.error || 'Не удалось отправить реплику', 'error');
+    if (response?.ok) {
+      els.liveTranscript.textContent = `✅ Отправлено преподавателю: «${text}»`;
+    } else {
+      els.liveTranscript.textContent = '⚠️ Не удалось отправить реплику.';
+      toast(response?.error || 'Не удалось отправить реплику', 'error');
+    }
     done();
   });
 }

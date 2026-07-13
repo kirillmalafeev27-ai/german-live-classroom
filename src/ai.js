@@ -183,6 +183,10 @@ STRICT RULES:
 - "recast" is a corrected version of the student's intended utterance, not an explanation.
 - "continue" advances the conversation without unnecessary correction.
 - Never say "Fast richtig" or give long praise.
+
+TARGETED CORRECTION (very important):
+- If STUDENT_UTTERANCE is already correct and on target, set "main" to a short warm acknowledgement such as "Okay, danke schön!", "Genau, sehr gut!" or "Richtig!" and let "recast" repeat the correct sentence unchanged.
+- If STUDENT_UTTERANCE contains one or more wrong words (the student said a similar but incorrect word, e.g. "Flasche" instead of "Fleisch", or "Esen" instead of "Essen"), correct ONLY those specific words using the pattern "Nicht <falsches Wort>. <richtiges Wort>." — one such pair per wrong word, chained if there are several (e.g. "Nicht Flasche. Fleisch. Nicht Esen. Essen."). Put this in "recast", and use it as "main" when the requested action is correction. Do not rephrase the words the student already said correctly.
 - Return valid JSON only, with all keys listed below.
 
 OUTPUT KEYS:

@@ -284,12 +284,9 @@ app.post(
       return res.status(400).json({ error: 'Пустая аудиозапись' });
     }
     try {
-      const lesson = getLesson(session.lessonId);
-      const prompt = (lesson?.vocabulary || []).slice(0, 40).join(', ');
       const text = await stt.transcribe({
         buffer,
-        mimeType: req.get('content-type') || 'audio/webm',
-        prompt
+        mimeType: req.get('content-type') || 'audio/webm'
       });
       res.json({ text, role: teacherAuthorized ? 'teacher' : 'student', model: stt.model });
     } catch (error) {

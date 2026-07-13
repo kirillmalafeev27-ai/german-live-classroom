@@ -207,9 +207,9 @@ export async function startVoiceCapture({
   onDeviceResolved,
   onSegment = async () => {},
   onState = () => {},
-  speechThreshold = 0.018,
+  speechThreshold = 0.02,
   silenceHangoverMs = 850,
-  minSpeechMs = 350,
+  minVoicedMs = 400,
   maxSegmentMs = 15000
 } = {}) {
   if (!canUseMicrophone()) throw new Error('Браузер не поддерживает доступ к микрофону');
@@ -257,19 +257,38 @@ export async function startVoiceCapture({
   let paused = false;
   let smoothed = 0;
   let raf = 0;
+  let lastFrameAt = performance.now();
 
   let recorder = null;
   let chunks = [];
   let recording = false;
-  let segmentStartAt = 0;
+  let voicedMs = 0;        // accumulated time with real speech energy in this segment
   let lastVoiceAt = 0;
-  let segmentValid = false;
+  let segmentReason = '';  // 'silence' | 'max' | 'abort'
+  let pendingTeardown = false;
+
+  const teardown = () => {
+    cancelAnimationFrame(raf);
+    try { source.disconnect(); } catch {}
+    try { analyser.disconnect(); } catch {}
+    stream.getTracks().forEach((item) => item.stop());
+    context.close().catch(() => {});
+    if (fill) {
+      fill.style.transform = 'scaleX(0)';
+      fill.parentElement?.classList.remove('receiving');
+    }
+    if (value) value.textContent = '0%';
+    if (signal) {
+      signal.textContent = 'Микрофон не активен';
+      signal.classList.remove('active');
+    }
+  };
 
   const startSegment = (now) => {
     recording = true;
-    segmentStartAt = now;
+    voicedMs = 0;
     lastVoiceAt = now;
-    segmentValid = false;
+    segmentReason = '';
     chunks = [];
     try {
       recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -283,28 +302,38 @@ export async function startVoiceCapture({
       const collected = chunks;
       chunks = [];
       const type = recorder?.mimeType || mimeType || 'audio/webm';
-      const shouldEmit = segmentValid && !paused && !stopped;
-      onState('listening');
-      if (!shouldEmit) return;
+      const heardEnough = voicedMs >= minVoicedMs && segmentReason !== 'abort';
       const blob = new Blob(collected, { type });
-      if (blob.size < 1200) return;
-      onState('processing');
-      Promise.resolve()
-        .then(() => onSegment(blob))
-        .catch(() => {})
-        .finally(() => { if (!recording && !stopped) onState('listening'); });
+      const emit = heardEnough && blob.size >= 1200 && !paused;
+
+      if (emit) {
+        onState('processing');
+        Promise.resolve()
+          .then(() => onSegment(blob))
+          .catch(() => {})
+          .finally(() => { if (!recording && !stopped) onState('listening'); });
+      } else {
+        // A real attempt that captured no usable speech: tell the UI so it can
+        // say "no sound" instead of silently doing nothing.
+        onState(segmentReason === 'abort' ? 'listening' : 'empty');
+      }
+
+      if (pendingTeardown) { pendingTeardown = false; teardown(); }
     };
     try { recorder.start(); } catch { recording = false; }
     onState('speaking');
   };
 
-  const finishSegment = (valid) => {
+  const finishSegment = (reason) => {
     if (!recording) return;
     recording = false;
-    segmentValid = valid;
+    segmentReason = reason;
     try {
       if (recorder && recorder.state !== 'inactive') recorder.stop();
-    } catch {}
+      else if (pendingTeardown) { pendingTeardown = false; teardown(); }
+    } catch {
+      if (pendingTeardown) { pendingTeardown = false; teardown(); }
+    }
   };
 
   const render = () => {
@@ -329,17 +358,20 @@ export async function startVoiceCapture({
       signal.classList.toggle('active', percent >= 4);
     }
 
+    const now = performance.now();
+    const dt = now - lastFrameAt;
+    lastFrameAt = now;
+
     if (!paused) {
-      const now = performance.now();
       const voiced = rms >= speechThreshold;
       if (voiced) lastVoiceAt = now;
       if (!recording && voiced) {
         startSegment(now);
       } else if (recording) {
-        const duration = now - segmentStartAt;
+        if (voiced) voicedMs += dt;
         const sinceVoice = now - lastVoiceAt;
-        if (duration >= maxSegmentMs) finishSegment(duration >= minSpeechMs);
-        else if (sinceVoice >= silenceHangoverMs) finishSegment(duration - sinceVoice >= minSpeechMs);
+        if (voicedMs >= maxSegmentMs) finishSegment('max');
+        else if (sinceVoice >= silenceHangoverMs) finishSegment('silence');
       }
     }
 
@@ -355,29 +387,27 @@ export async function startVoiceCapture({
     pause() {
       if (paused) return;
       paused = true;
-      if (recording) finishSegment(false);
+      if (recording) finishSegment('abort');
     },
     resume() {
       paused = false;
       lastVoiceAt = performance.now();
+      lastFrameAt = performance.now();
+    },
+    // Transcribe whatever has been said so far, then stop listening.
+    flush() {
+      if (recording && voicedMs >= minVoicedMs) finishSegment('silence');
     },
     stop() {
       if (stopped) return;
       stopped = true;
-      if (recording) finishSegment(false);
-      cancelAnimationFrame(raf);
-      try { source.disconnect(); } catch {}
-      try { analyser.disconnect(); } catch {}
-      stream.getTracks().forEach((item) => item.stop());
-      context.close().catch(() => {});
-      if (fill) {
-        fill.style.transform = 'scaleX(0)';
-        fill.parentElement?.classList.remove('receiving');
-      }
-      if (value) value.textContent = '0%';
-      if (signal) {
-        signal.textContent = 'Микрофон не активен';
-        signal.classList.remove('active');
+      if (recording) {
+        // Flush a real utterance instead of discarding it; defer teardown until
+        // the recorder hands us the final blob.
+        pendingTeardown = true;
+        finishSegment(voicedMs >= minVoicedMs ? 'silence' : 'abort');
+      } else {
+        teardown();
       }
     }
   };

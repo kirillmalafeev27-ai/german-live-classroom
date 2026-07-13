@@ -693,10 +693,10 @@ async function startTeacherMicrophone() {
         if (deviceId) state.teacherMicId = deviceId;
       },
       onState: (phase) => {
-        if (!state.teacherMicStarted) return;
-        if (phase === 'processing') els.teacherMicPartial.textContent = 'Распознаю через Whisper…';
-        else if (phase === 'speaking') els.teacherMicPartial.textContent = 'Слушаю…';
-        else els.teacherMicPartial.textContent = 'Говорите по-немецки…';
+        if (phase === 'processing') els.teacherMicPartial.textContent = '⏳ Распознаю через Whisper…';
+        else if (phase === 'speaking') els.teacherMicPartial.textContent = '🎙 Слышу вас, говорите…';
+        else if (phase === 'empty') els.teacherMicPartial.textContent = '🔇 Звук не пойман — говорите ближе к микрофону.';
+        else els.teacherMicPartial.textContent = state.teacherMicStarted ? 'Говорите по-немецки…' : 'Микрофон выключен.';
       },
       onSegment: (blob) => handleTeacherSegment(blob)
     });
@@ -721,12 +721,12 @@ async function handleTeacherSegment(blob) {
   try {
     const text = await transcribeAudio(blob, { token: state.token, roomCode: state.room?.code });
     if (!text) {
-      if (state.teacherMicStarted) els.teacherMicPartial.textContent = 'Не расслышал. Повторите, пожалуйста.';
+      els.teacherMicPartial.textContent = '🔇 Не расслышал разборчивую речь (тишина или шум). Повторите.';
       return;
     }
     state.teacherCommandText = text;
     els.teacherCommandInput.value = text;
-    els.teacherMicPartial.textContent = 'Фраза распознана. Можно исправить и отправить.';
+    els.teacherMicPartial.textContent = `✅ Услышал: «${text}» — проверьте и нажмите «Выдать ученику».`;
     state.socket?.emit('teacher:mic-partial', { text });
     state.socket?.emit('teacher:mic-committed', { text }, (response) => {
       if (!response?.ok) toast(response?.error || 'Не удалось подготовить голос', 'error');
@@ -735,6 +735,7 @@ async function handleTeacherSegment(blob) {
   } catch (error) {
     els.teacherMicStatus.textContent = `Ошибка распознавания: ${error.message}`;
     els.teacherMicStatus.className = 'status-badge error';
+    els.teacherMicPartial.textContent = `⚠️ Ошибка распознавания: ${error.message}`;
   }
 }
 
