@@ -297,10 +297,15 @@ async function startVoiceCapture({
 }
 
 // src/client/practice.js
+var PROGRESS_STORAGE_KEY = "glc.practiceProgress.v1";
+var LEVEL_STORAGE_KEY = "glc.practiceLevel";
 var state = {
+  curricula: { A1: [], A2: [] },
+  scenariosByLevel: { A1: {}, A2: {} },
   lessons: [],
   scenarios: {},
   config: { sttEnabled: false, ttsEnabled: false, aiEnabled: false },
+  level: localStorage.getItem(LEVEL_STORAGE_KEY) === "A2" ? "A2" : "A1",
   moduleId: 1,
   mode: "dialog",
   scenarioId: "",
@@ -310,7 +315,9 @@ var state = {
   capture: null,
   micOn: false,
   lastAiText: "",
-  currentAudio: null
+  currentAudio: null,
+  pendingInputMethod: "typed",
+  progress: loadProgress()
 };
 var els = {};
 document.addEventListener("DOMContentLoaded", boot);
@@ -322,15 +329,20 @@ async function boot() {
       fetchJson("/api/curriculum"),
       fetchJson("/api/practice/scenarios")
     ]);
-    state.lessons = curriculum.lessons || [];
-    state.scenarios = practice.scenarios || {};
+    state.curricula = {
+      A1: practice.curricula?.A1 || curriculum.lessons || [],
+      A2: practice.curricula?.A2 || []
+    };
+    state.scenariosByLevel = {
+      A1: practice.scenariosByLevel?.A1 || practice.scenarios || {},
+      A2: practice.scenariosByLevel?.A2 || {}
+    };
     state.config = {
       sttEnabled: Boolean(practice.sttEnabled),
       ttsEnabled: Boolean(practice.ttsEnabled),
       aiEnabled: Boolean(practice.aiEnabled)
     };
-    renderModules();
-    onSetupChange();
+    applyLevel(state.level, { resetConversation: false });
     refreshMics();
     if (!state.config.aiEnabled) {
       els.status.textContent = "AITUNNEL \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D";
@@ -353,12 +365,19 @@ async function boot() {
 }
 function cache() {
   els.status = $("#practiceStatus");
+  els.levelSelect = $("#levelSelect");
   els.moduleSelect = $("#moduleSelect");
   els.modeSelect = $("#modeSelect");
   els.scenarioField = $("#scenarioField");
   els.scenarioSelect = $("#scenarioSelect");
   els.startButton = $("#startButton");
   els.setupHint = $("#setupHint");
+  els.vocabularySummary = $("#vocabularySummary");
+  els.practiceVocabulary = $("#practiceVocabulary");
+  els.progressCaption = $("#progressCaption");
+  els.progressSummary = $("#progressSummary");
+  els.progressModules = $("#progressModules");
+  els.resetProgressButton = $("#resetProgressButton");
   els.startMicButton = $("#startMicButton");
   els.stopMicButton = $("#stopMicButton");
   els.micSelect = $("#micSelect");
@@ -380,6 +399,7 @@ function cache() {
   els.sendTypedButton = $("#sendTypedButton");
 }
 function bind() {
+  els.levelSelect.addEventListener("change", () => applyLevel(els.levelSelect.value));
   els.moduleSelect.addEventListener("change", () => {
     state.moduleId = Number(els.moduleSelect.value);
     onSetupChange();
@@ -392,6 +412,7 @@ function bind() {
     state.scenarioId = els.scenarioSelect.value;
   });
   els.startButton.addEventListener("click", startSession);
+  els.resetProgressButton.addEventListener("click", resetCurrentLevelProgress);
   els.startMicButton.addEventListener("click", startMic);
   els.stopMicButton.addEventListener("click", stopMic);
   els.micSelect.addEventListener("change", () => {
@@ -408,8 +429,32 @@ function bind() {
     const text = els.typedInput.value.trim();
     if (!text) return;
     els.typedInput.value = "";
-    sendUser(text);
+    sendUser(text, "typed");
   });
+}
+function applyLevel(level, { resetConversation = true } = {}) {
+  state.level = level === "A2" ? "A2" : "A1";
+  localStorage.setItem(LEVEL_STORAGE_KEY, state.level);
+  els.levelSelect.value = state.level;
+  state.lessons = state.curricula[state.level] || [];
+  state.scenarios = state.scenariosByLevel[state.level] || {};
+  if (!state.lessons.some((lesson) => lesson.id === state.moduleId)) state.moduleId = 1;
+  state.scenarioId = "";
+  renderModules();
+  onSetupChange();
+  renderProgress();
+  if (resetConversation) {
+    stopAudio();
+    state.started = false;
+    state.history = [];
+    state.lastAiText = "";
+    els.startButton.textContent = "\u041D\u0430\u0447\u0430\u0442\u044C";
+    els.liveTranscript.textContent = `\u0412\u044B\u0431\u0440\u0430\u043D \u0443\u0440\u043E\u0432\u0435\u043D\u044C ${state.level}. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041D\u0430\u0447\u0430\u0442\u044C\xBB, \u0437\u0430\u0442\u0435\u043C \u043E\u0442\u0432\u0435\u0447\u0430\u0439\u0442\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0438\u043B\u0438 \u0442\u0435\u043A\u0441\u0442\u043E\u043C.`;
+    els.correctionLine.hidden = true;
+    els.revealBox.hidden = true;
+    els.hintBox.hidden = true;
+    els.listenState.textContent = "\u0421\u043E\u0431\u0435\u0441\u0435\u0434\u043D\u0438\u043A \u0436\u0434\u0451\u0442";
+  }
 }
 function renderModules() {
   els.moduleSelect.innerHTML = state.lessons.map((lesson) => `<option value="${lesson.id}">${lesson.id}. ${esc(lesson.title)}</option>`).join("");
@@ -433,10 +478,122 @@ function onSetupChange() {
   }
   const sc = currentScenario();
   if (roleplay && sc) {
-    els.setupHint.innerHTML = `<div><b>\u0418\u0418 \u0438\u0433\u0440\u0430\u0435\u0442:</b> ${esc(sc.aiRole)}. <b>\u0412\u044B:</b> ${esc(sc.userRole)}.</div><div><b>\u0417\u0430\u0434\u0430\u0447\u0430:</b> ${esc(sc.goal)}</div>`;
+    els.setupHint.innerHTML = `<div><b>${state.level} \xB7 \u0418\u0418 \u0438\u0433\u0440\u0430\u0435\u0442:</b> ${esc(sc.aiRole)}. <b>\u0412\u044B:</b> ${esc(sc.userRole)}.</div><div><b>\u0417\u0430\u0434\u0430\u0447\u0430:</b> ${esc(sc.goal)}</div><div><b>\u0413\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u0444\u043E\u043A\u0443\u0441:</b> ${esc(sc.focus || (lesson?.grammar || []).join(" \xB7 "))}</div>`;
   } else if (lesson) {
-    els.setupHint.innerHTML = `<div><b>\u0413\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u043A\u0430:</b> ${esc((lesson.grammar || []).join(" \xB7 ")) || "\u2014"}</div><div><b>\u0422\u0435\u043C\u044B:</b> ${esc((lesson.themes || []).join(" \xB7 ")) || "\u2014"}</div>`;
+    els.setupHint.innerHTML = `<div><b>${state.level} \xB7 \u0413\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u043A\u0430:</b> ${esc((lesson.grammar || []).join(" \xB7 ")) || "\u2014"}</div><div><b>\u0422\u0435\u043C\u044B:</b> ${esc((lesson.themes || []).join(" \xB7 ")) || "\u2014"}</div>`;
   }
+  renderVocabulary();
+  renderProgress();
+}
+function renderVocabulary() {
+  const lesson = currentLesson();
+  const vocabulary = lesson?.vocabulary || [];
+  els.vocabularySummary.textContent = `\u0421\u043B\u043E\u0432\u0430\u0440\u044C \u043C\u043E\u0434\u0443\u043B\u044F (${vocabulary.length}) \xB7 PDF-\u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0430 ${lesson?.sourcePdfPage || "\u2014"}`;
+  els.practiceVocabulary.innerHTML = vocabulary.map((word) => `<span class="practice-vocab-chip" lang="de">${esc(word)}</span>`).join("") || '<span class="empty-small">\u0421\u043B\u043E\u0432\u0430\u0440\u044C \u043F\u043E\u043A\u0430 \u043D\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D</span>';
+}
+function emptyLevelProgress() {
+  return {
+    sessions: 0,
+    turns: 0,
+    correct: 0,
+    corrections: 0,
+    currentStreak: 0,
+    bestStreak: 0,
+    voiceTurns: 0,
+    typedTurns: 0,
+    lastPracticedAt: "",
+    modules: {}
+  };
+}
+function loadProgress() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PROGRESS_STORAGE_KEY) || "{}");
+    return {
+      version: 1,
+      levels: {
+        A1: { ...emptyLevelProgress(), ...saved.levels?.A1 || {} },
+        A2: { ...emptyLevelProgress(), ...saved.levels?.A2 || {} }
+      }
+    };
+  } catch {
+    return { version: 1, levels: { A1: emptyLevelProgress(), A2: emptyLevelProgress() } };
+  }
+}
+function currentLevelProgress() {
+  if (!state.progress.levels[state.level]) state.progress.levels[state.level] = emptyLevelProgress();
+  const progress = state.progress.levels[state.level];
+  if (!progress.modules || typeof progress.modules !== "object") progress.modules = {};
+  return progress;
+}
+function currentModuleProgress() {
+  const progress = currentLevelProgress();
+  const key = String(state.moduleId);
+  if (!progress.modules[key]) {
+    progress.modules[key] = { sessions: 0, turns: 0, correct: 0, corrections: 0, lastPracticedAt: "" };
+  }
+  return progress.modules[key];
+}
+function saveProgress() {
+  localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(state.progress));
+  renderProgress();
+}
+function recordSessionStart() {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const level = currentLevelProgress();
+  const module = currentModuleProgress();
+  level.sessions += 1;
+  level.lastPracticedAt = now;
+  module.sessions += 1;
+  module.lastPracticedAt = now;
+  saveProgress();
+}
+function recordPracticeTurn({ corrected, method }) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const level = currentLevelProgress();
+  const module = currentModuleProgress();
+  level.turns += 1;
+  module.turns += 1;
+  if (corrected) {
+    level.corrections += 1;
+    module.corrections += 1;
+    level.currentStreak = 0;
+  } else {
+    level.correct += 1;
+    module.correct += 1;
+    level.currentStreak += 1;
+    level.bestStreak = Math.max(level.bestStreak, level.currentStreak);
+  }
+  if (method === "voice") level.voiceTurns += 1;
+  else level.typedTurns += 1;
+  level.lastPracticedAt = now;
+  module.lastPracticedAt = now;
+  saveProgress();
+}
+function renderProgress() {
+  const progress = currentLevelProgress();
+  const accuracy = progress.turns ? Math.round(progress.correct / progress.turns * 100) : 0;
+  const lastDate = progress.lastPracticedAt ? new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short" }).format(new Date(progress.lastPracticedAt)) : "\u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E \u0437\u0430\u043D\u044F\u0442\u0438\u0439";
+  els.progressCaption.textContent = `${state.level}: \u0434\u0430\u043D\u043D\u044B\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u044D\u0442\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 \xB7 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u044F\u044F \u043F\u0440\u0430\u043A\u0442\u0438\u043A\u0430: ${lastDate}`;
+  els.progressSummary.innerHTML = [
+    ["\u0417\u0430\u043D\u044F\u0442\u0438\u0439", progress.sessions],
+    ["\u041E\u0442\u0432\u0435\u0442\u043E\u0432", progress.turns],
+    ["\u0411\u0435\u0437 \u0438\u0441\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0439", `${accuracy}%`],
+    ["\u041B\u0443\u0447\u0448\u0430\u044F \u0441\u0435\u0440\u0438\u044F", progress.bestStreak]
+  ].map(([label, value]) => `<div class="progress-stat"><b>${value}</b><span>${label}</span></div>`).join("");
+  els.progressModules.innerHTML = state.lessons.map((lesson) => {
+    const module = progress.modules?.[String(lesson.id)] || { sessions: 0, turns: 0, correct: 0 };
+    const moduleAccuracy = module.turns ? Math.round(module.correct / module.turns * 100) : 0;
+    return `<div class="progress-module ${module.turns ? "" : "empty"}" title="${esc(lesson.title)}">
+      <div class="progress-module-head"><b>${lesson.id}. ${esc(lesson.title)}</b><small>${module.turns} \u043E\u0442\u0432. \xB7 ${moduleAccuracy}%</small></div>
+      <div class="progress-bar"><span style="width:${module.turns ? Math.max(4, moduleAccuracy) : 0}%"></span></div>
+    </div>`;
+  }).join("");
+}
+function resetCurrentLevelProgress() {
+  if (!confirm(`\u0421\u0431\u0440\u043E\u0441\u0438\u0442\u044C \u0432\u0441\u044E \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0443 \u0443\u0440\u043E\u0432\u043D\u044F ${state.level} \u043D\u0430 \u044D\u0442\u043E\u043C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0435?`)) return;
+  state.progress.levels[state.level] = emptyLevelProgress();
+  saveProgress();
+  toast(`\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430 ${state.level} \u0441\u0431\u0440\u043E\u0448\u0435\u043D\u0430`, "success");
 }
 async function refreshMics() {
   try {
@@ -449,10 +606,12 @@ async function refreshMics() {
 async function startSession() {
   state.started = true;
   state.history = [];
+  state.pendingInputMethod = "typed";
   els.correctionLine.hidden = true;
   els.revealBox.hidden = true;
   els.hintBox.hidden = true;
   els.startButton.textContent = "\u041D\u0430\u0447\u0430\u0442\u044C \u0437\u0430\u043D\u043E\u0432\u043E";
+  recordSessionStart();
   const lesson = currentLesson();
   const sc = currentScenario();
   els.liveTranscript.textContent = state.mode === "roleplay" && sc ? `\u0420\u043E\u043B\u044C \u0418\u0418: ${sc.aiRole}. \u041E\u0442\u0432\u0435\u0442\u044C\u0442\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0438\u043B\u0438 \u0442\u0435\u043A\u0441\u0442\u043E\u043C.` : `\u041E\u0442\u0432\u0435\u0447\u0430\u0439\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438, \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044F: ${(lesson?.grammar || []).join(", ")}`;
@@ -463,7 +622,7 @@ async function startSession() {
     await requestReply();
   }
 }
-async function sendUser(text) {
+async function sendUser(text, method = "typed") {
   const value = String(text || "").trim();
   if (!value || state.busy) return;
   if (!state.started) {
@@ -473,6 +632,7 @@ async function sendUser(text) {
   els.liveTranscript.textContent = `\u0412\u044B \u0441\u043A\u0430\u0437\u0430\u043B\u0438: \xAB${value}\xBB`;
   els.correctionLine.hidden = true;
   state.history.push({ role: "user", text: value });
+  state.pendingInputMethod = method === "voice" ? "voice" : "typed";
   await requestReply();
 }
 async function requestReply() {
@@ -481,10 +641,13 @@ async function requestReply() {
   els.status.textContent = "\u0418\u0418 \u0434\u0443\u043C\u0430\u0435\u0442\u2026";
   els.status.className = "status-badge pending";
   els.listenState.textContent = "\u0421\u043E\u0431\u0435\u0441\u0435\u0434\u043D\u0438\u043A \u043F\u0435\u0447\u0430\u0442\u0430\u0435\u0442\u2026";
+  const shouldScore = state.history.at(-1)?.role === "user";
+  const inputMethod = state.pendingInputMethod;
   try {
     const data = await fetchJson("/api/practice/reply", {
       method: "POST",
       body: {
+        level: state.level,
         moduleId: state.moduleId,
         mode: state.mode,
         scenarioId: state.scenarioId,
@@ -493,9 +656,15 @@ async function requestReply() {
     });
     const reply = data.reply_de || "\u2026";
     state.history.push({ role: "ai", text: reply });
+    if (shouldScore) recordPracticeTurn({ corrected: Boolean(data.correction), method: inputMethod });
     presentAiTurn(reply, data.correction, data.hint_ru);
     els.status.textContent = "\u0412\u0430\u0448 \u0445\u043E\u0434";
     els.status.className = "status-badge ok";
+    if (data.done) {
+      state.started = false;
+      els.status.textContent = "\u0422\u0440\u0435\u043D\u0438\u0440\u043E\u0432\u043A\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430";
+      els.startButton.textContent = "\u041D\u0430\u0447\u0430\u0442\u044C \u0437\u0430\u043D\u043E\u0432\u043E";
+    }
   } catch (error) {
     els.status.textContent = "\u041E\u0448\u0438\u0431\u043A\u0430";
     els.status.className = "status-badge error";
@@ -596,7 +765,7 @@ async function handleSegment(blob) {
       els.liveTranscript.textContent = "\u{1F507} \u041D\u0435 \u0440\u0430\u0441\u0441\u043B\u044B\u0448\u0430\u043B. \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435.";
       return;
     }
-    await sendUser(text);
+    await sendUser(text, "voice");
   } catch (error) {
     els.liveTranscript.textContent = `\u26A0\uFE0F ${error.message}`;
   }

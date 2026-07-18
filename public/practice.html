@@ -11,7 +11,7 @@
     <header class="student-head card">
       <div class="student-title">
         <div class="brand-mark">DE</div>
-        <div><h1>Тренажёр диалогов</h1><p>Без преподавателя · собеседник — <b>ИИ (ChatGPT-mini)</b></p></div>
+        <div><h1>Тренажёр диалогов A1–A2</h1><p>Без преподавателя · собеседник — <b>ИИ (ChatGPT-mini)</b></p></div>
       </div>
       <div class="student-head-status">
         <a class="status-badge muted" href="/">← На главную</a>
@@ -19,8 +19,18 @@
       </div>
     </header>
 
+    <section class="card practice-progress">
+      <div class="card-head">
+        <div><span class="eyebrow">Ваш результат</span><h2>Статистика прогресса</h2><p id="progressCaption">Сохраняется в этом браузере.</p></div>
+        <button id="resetProgressButton" class="ghost" type="button">Сбросить статистику уровня</button>
+      </div>
+      <div id="progressSummary" class="progress-summary"></div>
+      <div id="progressModules" class="progress-modules"></div>
+    </section>
+
     <section class="card practice-setup">
       <div class="setup-row">
+        <label class="field level-field"><span>Уровень</span><select id="levelSelect"><option value="A1">A1</option><option value="A2">A2</option></select></label>
         <label class="field"><span>Модуль</span><select id="moduleSelect"></select></label>
         <label class="field"><span>Режим</span>
           <select id="modeSelect">
@@ -32,6 +42,10 @@
         <button id="startButton" class="primary" type="button">Начать</button>
       </div>
       <div id="setupHint" class="practice-meta"></div>
+      <details class="practice-vocabulary">
+        <summary id="vocabularySummary">Словарь модуля</summary>
+        <div id="practiceVocabulary" class="practice-vocabulary-list"></div>
+      </details>
     </section>
 
     <section class="mic-card card">

@@ -1,4 +1,5 @@
 import { getLesson } from './curriculum.js';
+import { getA2Lesson } from './curriculum-a2.js';
 
 // Self-study practice: a learner picks a module and a mode, and ChatGPT-mini
 // (via AITUNNEL) becomes the German conversation partner. Two modes:
@@ -24,7 +25,7 @@ export const practiceModes = [
 
 // Two role-play scenarios per module. `opener` is the AI's first German line so
 // the scene starts in character without an extra model call.
-const SCENARIOS = {
+const A1_SCENARIOS = {
   1: [
     { id: 'kennenlernen', title: 'Знакомство', aiRole: 'новый студент курса', userRole: 'студент', goal: 'Представьтесь: имя, откуда вы, что вы учите.', focus: 'sein, W-Fragen', opener: 'Hallo! Ich bin Lena. Wie heißt du und woher kommst du?' },
     { id: 'hobbys', title: 'Что тебе нравится', aiRole: 'новый знакомый', userRole: 'студент', goal: 'Скажите, что вам нравится (mögen).', focus: 'mögen', opener: 'Ich mag Musik und Kaffee. Und du? Was magst du?' }
@@ -91,9 +92,87 @@ const SCENARIOS = {
   ]
 };
 
-export function listPracticeScenarios() {
+const A2_SCENARIOS = {
+  1: [
+    { id: 'verlust', title: 'Пропажа в поездке', aiRole: 'полицейский', userRole: 'турист', goal: 'Опишите потерянную вещь и обстоятельства пропажи.', focus: 'Perfekt, Stadt, Verlustanzeige', opener: 'Guten Tag. Was haben Sie verloren und wo ist das passiert?' },
+    { id: 'stadtfuehrung', title: 'Экскурсия по городу', aiRole: 'экскурсовод', userRole: 'турист', goal: 'Расспросите о городе и объясните свой маршрут.', focus: 'durch, vorbei, gegenüber', opener: 'Willkommen! Was möchten Sie heute in unserer Stadt besichtigen?' }
+  ],
+  2: [
+    { id: 'sprachkurs', title: 'Запись на языковой курс', aiRole: 'сотрудник VHS', userRole: 'кандидат', goal: 'Узнайте об уровне, расписании и вежливо попросите подходящий вариант.', focus: 'weil, könnte', opener: 'Guten Tag! Für welchen Deutschkurs interessieren Sie sich?' },
+    { id: 'migration', title: 'Новые планы', aiRole: 'друг', userRole: 'человек с планами на переезд', goal: 'Расскажите о целях и объясните причины.', focus: 'Ziele, Wünsche, weil', opener: 'Du möchtest auswandern? Wohin möchtest du gehen und warum?' }
+  ],
+  3: [
+    { id: 'wettbewerb', title: 'Конкурс талантов', aiRole: 'ведущий конкурса', userRole: 'участник', goal: 'Опишите своё увлечение и сравните его с другими.', focus: 'Komparativ, Superlativ, dass', opener: 'Willkommen beim Wettbewerb! Was kannst du besonders gut?' },
+    { id: 'hobbyvergleich', title: 'Выбираем новое хобби', aiRole: 'друг', userRole: 'друг', goal: 'Сравните несколько занятий и выберите лучшее.', focus: 'höher, besser, am liebsten', opener: 'Sollen wir klettern, tanzen oder Tischtennis spielen? Was findest du besser?' }
+  ],
+  4: [
+    { id: 'fernsehplan', title: 'Что посмотреть?', aiRole: 'друг', userRole: 'друг', goal: 'Обсудите программу и договоритесь, что смотреть.', focus: 'was für ein, Sendungen', opener: 'Was für eine Sendung möchtest du heute Abend sehen?' },
+    { id: 'casting', title: 'Телевизионный кастинг', aiRole: 'ведущий кастинга', userRole: 'кандидат', goal: 'Представьтесь и опишите себя.', focus: 'Adjektivdeklination, Personenbeschreibung', opener: 'Willkommen zum Casting! Was für ein Mensch sind Sie?' }
+  ],
+  5: [
+    { id: 'alltagsstress', title: 'Очень загруженный день', aiRole: 'друг', userRole: 'собеседник', goal: 'Опишите распорядок и объясните, почему вы опоздали.', focus: 'reflexive Verben, ab/bis/zwischen', opener: 'Du siehst gestresst aus. Wie war dein Tag?' },
+    { id: 'wellness', title: 'Выходной в wellness-отеле', aiRole: 'администратор', userRole: 'гость', goal: 'Узнайте об услугах и спланируйте отдых.', focus: 'Alltag, Erholung, Zeitangaben', opener: 'Willkommen! Wie möchten Sie sich heute bei uns erholen?' }
+  ],
+  6: [
+    { id: 'moebelbestellung', title: 'Заказ мебели', aiRole: 'сотрудник интернет-магазина', userRole: 'покупатель', goal: 'Выберите мебель, уточните материал, размер и доставку.', focus: 'Adjektivdeklination, aus + Material', opener: 'Guten Tag! Welche Möbel möchten Sie bestellen?' },
+    { id: 'reklamation', title: 'Рекламация', aiRole: 'служба поддержки', userRole: 'недовольный покупатель', goal: 'Объясните проблему с заказом и потребуйте решение.', focus: 'Bestellung, Lieferung, Reklamation', opener: 'Kundenservice, guten Tag. Was ist mit Ihrer Bestellung passiert?' }
+  ],
+  7: [
+    { id: 'wohnungsbesichtigung', title: 'Просмотр квартиры', aiRole: 'арендодатель', userRole: 'кандидат на аренду', goal: 'Расспросите о квартире, цене и расположении.', focus: 'Wohnungssuche, Wechselpräpositionen', opener: 'Willkommen zur Besichtigung. Was möchten Sie über die Wohnung wissen?' },
+    { id: 'umzug', title: 'Расставляем мебель', aiRole: 'помощник при переезде', userRole: 'хозяин квартиры', goal: 'Объясните, куда поставить вещи.', focus: 'wo/wohin, Dativ/Akkusativ', opener: 'Wohin soll ich das Sofa und die Kisten stellen?' }
+  ],
+  8: [
+    { id: 'schulzeit', title: 'Воспоминания о школе', aiRole: 'бывший одноклассник', userRole: 'одноклассник', goal: 'Расскажите о школе, учителях и детстве.', focus: 'Präteritum der Modalverben', opener: 'Weißt du noch? Was mussten wir früher in der Schule machen?' },
+    { id: 'biografie', title: 'Интервью о биографии', aiRole: 'журналист', userRole: 'известный человек', goal: 'Расскажите об образовании и важных событиях жизни.', focus: 'Biografie, Ausbildung', opener: 'Wo sind Sie geboren und welche Ausbildung haben Sie gemacht?' }
+  ],
+  9: [
+    { id: 'buero_problem', title: 'Проблема в офисе', aiRole: 'IT-специалист', userRole: 'сотрудник', goal: 'Опишите техническую проблему и попросите помощь.', focus: 'Büro, wenn, IT', opener: 'IT-Service, guten Tag. Was funktioniert bei Ihnen nicht?' },
+    { id: 'termin', title: 'Перенести совещание', aiRole: 'коллега', userRole: 'организатор', goal: 'Отмените или перенесите встречу и объясните причину.', focus: 'Termin, E-Mail, wenn', opener: 'Wir haben morgen eine Besprechung. Passt der Termin noch?' }
+  ],
+  10: [
+    { id: 'smartphoneberatung', title: 'Выбор смартфона', aiRole: 'консультант', userRole: 'покупатель', goal: 'Уточните характеристики и выберите модель.', focus: 'indirekte Fragen, Technik', opener: 'Guten Tag! Was ist Ihnen bei einem Smartphone besonders wichtig?' },
+    { id: 'app_diskussion', title: 'Полезные приложения', aiRole: 'друг', userRole: 'собеседник', goal: 'Обсудите плюсы и минусы приложений.', focus: 'Meinung, zustimmen, widersprechen', opener: 'Welche App benutzt du am häufigsten, und warum?' }
+  ],
+  11: [
+    { id: 'freundschaft', title: 'История дружбы', aiRole: 'журналист', userRole: 'герой статьи', goal: 'Расскажите, как началась ваша дружба.', focus: 'Präteritum, als', opener: 'Wann und wie haben Sie Ihren besten Freund kennengelernt?' },
+    { id: 'freund_beraten', title: 'Что важно в дружбе?', aiRole: 'новый знакомый', userRole: 'собеседник', goal: 'Опишите хорошего друга и аргументируйте мнение.', focus: 'Personenbeschreibung, Freundschaft', opener: 'Was macht für dich einen wirklich guten Freund aus?' }
+  ],
+  12: [
+    { id: 'notruf', title: 'Экстренный вызов 112', aiRole: 'диспетчер службы спасения', userRole: 'свидетель происшествия', goal: 'Сообщите, что случилось, где вы и в каком состоянии пострадавший.', focus: 'Notruf, Verletzung', opener: 'Notruf 112. Wo genau ist der Unfall passiert?' },
+    { id: 'beim_arzt', title: 'После несчастного случая', aiRole: 'врач', userRole: 'пациент', goal: 'Опишите симптомы и получите рекомендации.', focus: 'Krankheit, sollte, -bar/-los', opener: 'Guten Tag. Was ist passiert und wo haben Sie Schmerzen?' }
+  ],
+  13: [
+    { id: 'restaurant', title: 'Ужин в ресторане', aiRole: 'официант', userRole: 'гость', goal: 'Уточните состав блюд, закажите и оцените еду.', focus: 'welch-/dies-, Essen', opener: 'Guten Abend! Möchten Sie zuerst eine Vorspeise bestellen?' },
+    { id: 'empfehlung', title: 'Рекомендуем местную кухню', aiRole: 'турист', userRole: 'местный житель', goal: 'Посоветуйте ресторан и региональные блюда.', focus: 'Gerichte, Empfehlung', opener: 'Ich möchte etwas Typisches essen. Welches Restaurant empfehlen Sie mir?' }
+  ],
+  14: [
+    { id: 'einkaufszentrum', title: 'В торговом центре', aiRole: 'сотрудник информации', userRole: 'покупатель', goal: 'Узнайте, где находятся нужные магазины.', focus: 'Relativsätze, Geschäfte', opener: 'Guten Tag! Welchen Laden suchen Sie?' },
+    { id: 'kaufberatung', title: 'Совет перед покупкой', aiRole: 'друг', userRole: 'покупатель', goal: 'Сравните магазины и объясните решение.', focus: 'Relativsätze, Vorteile', opener: 'In welchem Geschäft möchtest du einkaufen, und warum gerade dort?' }
+  ],
+  15: [
+    { id: 'partyplanung', title: 'Планируем сюрприз', aiRole: 'друг-организатор', userRole: 'организатор', goal: 'Распределите задачи и подготовьте праздник.', focus: 'Relativsätze mit Präposition, Party', opener: 'Wir planen eine Überraschungsparty. Welche Aufgaben möchtest du übernehmen?' },
+    { id: 'hochzeit', title: 'Свадебный форс-мажор', aiRole: 'свадебный координатор', userRole: 'помощник', goal: 'Обсудите проблемы и предложите решения.', focus: 'Hochzeit, Panne, Vorschläge', opener: 'Wir haben ein Problem: Der Strom ist ausgefallen. Was können wir tun?' }
+  ],
+  16: [
+    { id: 'kulturprogramm', title: 'Выбираем мероприятие', aiRole: 'сотрудник инфоцентра', userRole: 'посетитель', goal: 'Расспросите о программе и выберите событие.', focus: 'Verben mit Präpositionen, wo(r)-', opener: 'Willkommen! Wofür interessieren Sie sich: Musik, Theater oder Straßenkunst?' },
+    { id: 'festival', title: 'После фестиваля', aiRole: 'друг', userRole: 'посетитель фестиваля', goal: 'Расскажите о впечатлениях и любимом выступлении.', focus: 'sich freuen über, denken an, träumen von', opener: 'Wie war das Festival? Worüber hast du dich besonders gefreut?' }
+  ]
+};
+
+const SCENARIOS_BY_LEVEL = { A1: A1_SCENARIOS, A2: A2_SCENARIOS };
+
+export function normalizePracticeLevel(level) {
+  return String(level || '').toUpperCase() === 'A2' ? 'A2' : 'A1';
+}
+
+export function getPracticeLesson(level, moduleId) {
+  return normalizePracticeLevel(level) === 'A2' ? getA2Lesson(moduleId) : getLesson(moduleId);
+}
+
+export function listPracticeScenarios(level = 'A1') {
+  const source = SCENARIOS_BY_LEVEL[normalizePracticeLevel(level)];
   const result = {};
-  for (const [moduleId, scenarios] of Object.entries(SCENARIOS)) {
+  for (const [moduleId, scenarios] of Object.entries(source)) {
     result[moduleId] = scenarios.map(({ id, title, aiRole, userRole, goal, focus, opener }) => ({
       id, title, aiRole, userRole, goal, focus, opener
     }));
@@ -101,28 +180,30 @@ export function listPracticeScenarios() {
   return result;
 }
 
-export function getScenario(moduleId, scenarioId) {
-  return (SCENARIOS[Number(moduleId)] || []).find((item) => item.id === scenarioId) || null;
+export function getScenario(moduleId, scenarioId, level = 'A1') {
+  const source = SCENARIOS_BY_LEVEL[normalizePracticeLevel(level)];
+  return (source[Number(moduleId)] || []).find((item) => item.id === scenarioId) || null;
 }
 
-export function getScenarioOpener(moduleId, scenarioId) {
-  return getScenario(moduleId, scenarioId)?.opener || '';
+export function getScenarioOpener(moduleId, scenarioId, level = 'A1') {
+  return getScenario(moduleId, scenarioId, level)?.opener || '';
 }
 
-export function buildPracticeSystemPrompt({ moduleId, mode, scenario }) {
-  const lesson = getLesson(moduleId);
+export function buildPracticeSystemPrompt({ level = 'A1', moduleId, mode, scenario }) {
+  const normalizedLevel = normalizePracticeLevel(level);
+  const lesson = getPracticeLesson(normalizedLevel, moduleId);
   const grammar = (lesson?.grammar || []).join('; ');
   const themes = (lesson?.themes || []).join('; ');
   const vocab = (lesson?.vocabulary || []).slice(0, 70).join(', ');
 
-  const common = `You are a friendly, patient German conversation partner and tutor for an A1 learner.
-The lesson module is "${lesson?.id}. ${lesson?.title}".
+  const common = `You are a friendly, patient German conversation partner and tutor for a ${normalizedLevel} learner.
+The course level is ${normalizedLevel}. The lesson module is "${lesson?.id}. ${lesson?.title}".
 TARGET GRAMMAR (the learner must practise this): ${grammar || 'A1 basics'}.
 TOPICS: ${themes || lesson?.title}.
 USEFUL VOCABULARY (prefer these words): ${vocab}.
 
 RULES:
-- Speak simple A1 German only: short sentences, present tense (plus the target grammar), known words.
+- Speak level-appropriate ${normalizedLevel} German: clear sentences, the target grammar, and vocabulary from this module.
 - Keep every "reply_de" to 1-3 short sentences and normally end with ONE question so the dialogue continues.
 - MEMORY & PROGRESS: The full conversation so far is given to you. Read it. NEVER repeat a question you (the assistant) already asked and NEVER re-ask something the learner already answered. Each of your turns must move the dialogue FORWARD to a new detail, sub-topic or follow-up that builds on the learner's previous answers. If a natural line of talk is exhausted, open a new related sub-topic within the module — do not loop back to the beginning.
 - Steer the conversation so the learner is naturally forced to use the TARGET GRAMMAR.
@@ -147,8 +228,8 @@ MODE: TOPIC DIALOGUE.
 Lead a natural dialogue on the module topic. Ask questions that require the learner to answer using the TARGET GRAMMAR (for example, for Imperativ + Gesundheit: complain about a symptom and ask "Was soll ich machen?" so the learner answers with imperatives).`;
 }
 
-export function buildPracticeMessages({ moduleId, mode, scenario, history = [], userText = '' }) {
-  const system = buildPracticeSystemPrompt({ moduleId, mode, scenario });
+export function buildPracticeMessages({ level = 'A1', moduleId, mode, scenario, history = [], userText = '' }) {
+  const system = buildPracticeSystemPrompt({ level, moduleId, mode, scenario });
   const messages = [{ role: 'system', content: system }];
 
   // The client is the single source of truth for the conversation and sends the

@@ -358,15 +358,36 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 }
 
 /* ---------- Self-study practice (reuses the student panel) ---------- */
+.practice-progress { padding: 18px; display: grid; gap: 14px; }
+.practice-progress .card-head { margin: 0; }
+.progress-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.progress-stat { padding: 13px; border: 1px solid #dbe4d8; border-radius: 13px; background: linear-gradient(145deg, #fbfdf9, #f2f8ef); display: grid; gap: 3px; }
+.progress-stat b { font-size: 24px; color: #24472d; }
+.progress-stat span { color: var(--muted); font-size: 11px; font-weight: 750; }
+.progress-modules { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.progress-module { min-width: 0; padding: 10px; border: 1px solid #e0e5df; border-radius: 11px; background: #fff; display: grid; gap: 6px; }
+.progress-module-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.progress-module-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.progress-module-head small { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.progress-bar { height: 5px; overflow: hidden; border-radius: 999px; background: #e9ede7; }
+.progress-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #79b954, #3c986a); transform-origin: left; }
+.progress-module.empty .progress-bar > span { background: #cbd2ca; }
 .practice-setup { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .practice-setup .setup-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .practice-setup .setup-row .field { flex: 1 1 180px; }
+.practice-setup .setup-row .level-field { flex: 0 1 115px; }
 .practice-setup .setup-row .primary { min-height: 48px; padding: 0 22px; }
 .practice-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .practice-meta b { color: var(--ink); }
+.practice-vocabulary { border: 1px solid #dce4da; border-radius: 12px; background: #fafcf9; }
+.practice-vocabulary summary { padding: 11px 13px; cursor: pointer; color: #36533d; font-size: 13px; font-weight: 800; }
+.practice-vocabulary-list { padding: 0 12px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.practice-vocab-chip { padding: 5px 8px; border-radius: 999px; background: #edf5e8; border: 1px solid #d3e3ca; color: #37513c; font-size: 11px; }
 .practice-correction { margin-top: 10px; color: var(--violet); font-size: 14px; font-weight: 800; }
 .practice-hint { margin-top: 12px; background: #fff6e2; border: 1px solid #f0dca6; border-radius: var(--radius-small); padding: 9px 12px; font-size: 13.5px; color: #8a6410; }
 
 @media (max-width: 640px) {
+  .progress-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .progress-modules { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .practice-setup .setup-row .field, .practice-setup .setup-row .primary { flex: 1 1 100%; }
 }

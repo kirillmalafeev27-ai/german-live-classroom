@@ -137,9 +137,9 @@ export class AiService {
     }
   }
 
-  async practiceReply({ moduleId, mode, scenario, history = [], userText = '', maxTokens = 500 }) {
+  async practiceReply({ level = 'A1', moduleId, mode, scenario, history = [], userText = '', maxTokens = 500 }) {
     if (!this.enabled) throw new Error('AITUNNEL не настроен');
-    const messages = buildPracticeMessages({ moduleId, mode, scenario, history, userText });
+    const messages = buildPracticeMessages({ level, moduleId, mode, scenario, history, userText });
     const json = await this.requestChat({ messages, maxTokens, temperature: 0.5 });
     return {
       reply_de: String(json?.reply_de || json?.reply || '').trim(),

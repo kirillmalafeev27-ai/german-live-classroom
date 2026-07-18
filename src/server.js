@@ -15,7 +15,10 @@ import { AiService } from './ai.js';
 import { TtsService } from './tts.js';
 import { SttService } from './stt.js';
 import { curriculum, getLesson } from './curriculum.js';
-import { practiceModes, listPracticeScenarios, getScenario } from './practice.js';
+import { a2Curriculum } from './curriculum-a2.js';
+import {
+  practiceModes, listPracticeScenarios, getScenario, getPracticeLesson, normalizePracticeLevel
+} from './practice.js';
 import { openapi } from './openapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,6 +143,8 @@ app.get('/api/practice/scenarios', (_req, res) => {
   res.json({
     modes: practiceModes,
     scenarios: listPracticeScenarios(),
+    curricula: { A1: curriculum, A2: a2Curriculum },
+    scenariosByLevel: { A1: listPracticeScenarios('A1'), A2: listPracticeScenarios('A2') },
     sttEnabled: stt.enabled,
     ttsEnabled: tts.enabled,
     aiEnabled: ai.enabled
@@ -147,11 +152,12 @@ app.get('/api/practice/scenarios', (_req, res) => {
 });
 
 app.post('/api/practice/reply', async (req, res) => {
+  const level = normalizePracticeLevel(req.body?.level);
   const moduleId = Number(req.body?.moduleId);
-  const lesson = getLesson(moduleId);
+  const lesson = getPracticeLesson(level, moduleId);
   if (!lesson) return res.status(400).json({ error: 'Неизвестный модуль' });
   const mode = req.body?.mode === 'roleplay' ? 'roleplay' : 'dialog';
-  const scenario = mode === 'roleplay' ? getScenario(moduleId, String(req.body?.scenarioId || '')) : null;
+  const scenario = mode === 'roleplay' ? getScenario(moduleId, String(req.body?.scenarioId || ''), level) : null;
   if (mode === 'roleplay' && !scenario) return res.status(400).json({ error: 'Неизвестный сценарий' });
   if (!ai.enabled) return res.status(503).json({ error: 'AITUNNEL не настроен' });
 
@@ -164,7 +170,7 @@ app.post('/api/practice/reply', async (req, res) => {
   const userText = cleanText(req.body?.userText, 500);
 
   try {
-    const reply = await ai.practiceReply({ moduleId, mode, scenario, history, userText });
+    const reply = await ai.practiceReply({ level, moduleId, mode, scenario, history, userText });
     res.json({ ...reply, model: ai.model });
   } catch (error) {
     res.status(502).json({ error: error.message });
