@@ -295,6 +295,200 @@ async function startVoiceCapture({
     }
   };
 }
+var silentClip = "";
+function silentClipUrl(seconds = 0.05, sampleRate = 8e3) {
+  if (silentClip) return silentClip;
+  const frames = Math.max(1, Math.round(seconds * sampleRate));
+  const buffer = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + frames * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, frames * 2, true);
+  silentClip = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  return silentClip;
+}
+function isAutoplayBlocked(error) {
+  if (!error) return false;
+  if (error.name === "NotAllowedError") return true;
+  return /didn'?t interact|user gesture|user activation|not allowed|autoplay/i.test(String(error.message || ""));
+}
+function describeAudioError(error) {
+  if (isAutoplayBlocked(error)) return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0437\u0432\u0443\u043A. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u2014 \u0434\u0430\u043B\u044C\u0448\u0435 \u0432\u0441\u0451 \u0438\u0433\u0440\u0430\u0435\u0442 \u0441\u0430\u043C\u043E.";
+  if (error?.name === "NotSupportedError") return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043D\u0435 \u0441\u043C\u043E\u0433 \u043F\u0440\u043E\u0438\u0433\u0440\u0430\u0442\u044C \u044D\u0442\u043E \u0430\u0443\u0434\u0438\u043E. \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438\u043B\u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 Chrome/Safari \u043F\u043E\u0441\u0432\u0435\u0436\u0435\u0435.";
+  return `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0430\u0443\u0434\u0438\u043E: ${error?.message || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430"}`;
+}
+function createAudioGate({ onChange = () => {
+} } = {}) {
+  let element = null;
+  let context = null;
+  let unlocked = false;
+  let pending = null;
+  let unlocking = null;
+  const ensureElement = () => {
+    if (element) return element;
+    element = new Audio();
+    element.preload = "auto";
+    element.playsInline = true;
+    element.setAttribute("playsinline", "");
+    return element;
+  };
+  const markUnlocked = () => {
+    if (unlocked) return;
+    unlocked = true;
+    try {
+      onChange(true);
+    } catch {
+    }
+  };
+  const primeSpeech = () => {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(" ");
+      utterance.volume = 0;
+      utterance.lang = "de-DE";
+      speechSynthesis.speak(utterance);
+      speechSynthesis.cancel();
+    } catch {
+    }
+  };
+  async function runUnlock() {
+    const el = ensureElement();
+    let started = null;
+    try {
+      el.src = silentClipUrl();
+      started = el.play();
+    } catch {
+    }
+    primeSpeech();
+    try {
+      await started;
+      el.pause();
+      try {
+        el.currentTime = 0;
+      } catch {
+      }
+      markUnlocked();
+    } catch {
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      try {
+        context = context || new AudioContextClass();
+        if (context.state === "suspended") await context.resume();
+        const source = context.createBufferSource();
+        source.buffer = context.createBuffer(1, 1, 22050);
+        source.connect(context.destination);
+        source.start(0);
+      } catch {
+      }
+    }
+    return unlocked;
+  }
+  const clearPending = (mode = "resolve", error = null) => {
+    const current = pending;
+    pending = null;
+    if (!current) return;
+    current.cleanup();
+    if (mode === "reject") current.reject(error || new Error("\u0412\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0434\u0435\u043D\u0438\u0435 \u043F\u0440\u0435\u0440\u0432\u0430\u043D\u043E"));
+    else current.resolve();
+  };
+  return {
+    get unlocked() {
+      return unlocked;
+    },
+    get element() {
+      return ensureElement();
+    },
+    // Call this synchronously from a real user gesture (click/tap/keydown).
+    // Concurrent calls (the document-wide listener and the banner click fire
+    // together) share one attempt instead of interrupting each other.
+    unlock() {
+      if (unlocked) return Promise.resolve(true);
+      if (unlocking) return unlocking;
+      unlocking = runUnlock().finally(() => {
+        unlocking = null;
+      });
+      return unlocking;
+    },
+    // Resolves when the clip finishes; rejects with the browser error when the
+    // browser refuses to start it, so callers can offer the unlock button.
+    async play(url, { rate = 1 } = {}) {
+      const el = ensureElement();
+      clearPending("resolve");
+      try {
+        el.pause();
+      } catch {
+      }
+      el.src = url;
+      try {
+        el.load();
+      } catch {
+      }
+      el.playbackRate = rate;
+      await el.play();
+      markUnlocked();
+      try {
+        el.playbackRate = rate;
+      } catch {
+      }
+      return new Promise((resolve, reject) => {
+        const onEnded = () => clearPending("resolve");
+        const onError = () => clearPending("reject", new Error("\u0410\u0443\u0434\u0438\u043E \u043D\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u043B\u043E\u0441\u044C"));
+        const cleanup = () => {
+          el.removeEventListener("ended", onEnded);
+          el.removeEventListener("error", onError);
+        };
+        pending = { resolve, reject, cleanup };
+        el.addEventListener("ended", onEnded);
+        el.addEventListener("error", onError);
+        if (el.ended) clearPending("resolve");
+      });
+    },
+    stop() {
+      clearPending("resolve");
+      if (element) {
+        try {
+          element.pause();
+        } catch {
+        }
+      }
+      if ("speechSynthesis" in window) {
+        try {
+          speechSynthesis.cancel();
+        } catch {
+        }
+      }
+    }
+  };
+}
+function unlockOnFirstGesture(gate, done = () => {
+}) {
+  const events = ["pointerdown", "touchstart", "keydown"];
+  const detach = () => events.forEach((name) => document.removeEventListener(name, handler, true));
+  function handler() {
+    Promise.resolve(gate.unlock()).then(() => {
+      if (!gate.unlocked) return;
+      detach();
+      done(true);
+    }).catch(() => {
+    });
+  }
+  events.forEach((name) => document.addEventListener(name, handler, true));
+  return detach;
+}
 
 // src/client/practice.js
 var PROGRESS_STORAGE_KEY = "glc.practiceProgress.v1";
@@ -315,7 +509,9 @@ var state = {
   capture: null,
   micOn: false,
   lastAiText: "",
-  currentAudio: null,
+  audio: null,
+  speaking: false,
+  pendingSpeech: null,
   pendingInputMethod: "typed",
   progress: loadProgress()
 };
@@ -323,6 +519,10 @@ var els = {};
 document.addEventListener("DOMContentLoaded", boot);
 async function boot() {
   cache();
+  state.audio = createAudioGate({ onChange: (unlocked) => {
+    if (unlocked) hideUnlockBanner();
+  } });
+  unlockOnFirstGesture(state.audio, () => flushPendingSpeech());
   bind();
   try {
     const [curriculum, practice] = await Promise.all([
@@ -397,6 +597,7 @@ function cache() {
   els.typedForm = $("#typedForm");
   els.typedInput = $("#typedInput");
   els.sendTypedButton = $("#sendTypedButton");
+  els.audioUnlock = $("#audioUnlock");
 }
 function bind() {
   els.levelSelect.addEventListener("change", () => applyLevel(els.levelSelect.value));
@@ -411,7 +612,9 @@ function bind() {
   els.scenarioSelect.addEventListener("change", () => {
     state.scenarioId = els.scenarioSelect.value;
   });
-  els.startButton.addEventListener("click", startSession);
+  els.startButton.addEventListener("click", () => {
+    void unlockAudio().then(startSession);
+  });
   els.resetProgressButton.addEventListener("click", resetCurrentLevelProgress);
   els.startMicButton.addEventListener("click", startMic);
   els.stopMicButton.addEventListener("click", stopMic);
@@ -424,6 +627,7 @@ function bind() {
   els.repeatButton.addEventListener("click", () => replay(1));
   els.slowerButton.addEventListener("click", () => replay(0.75));
   els.revealButton.addEventListener("click", revealText);
+  els.audioUnlock.addEventListener("click", () => unlockAudio({ announce: true }));
   els.typedForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = els.typedInput.value.trim();
@@ -698,39 +902,77 @@ function revealText() {
   els.revealBox.hidden = false;
 }
 function replay(rate) {
-  if (state.lastAiText) speak(state.lastAiText, rate);
+  if (!state.lastAiText) return;
+  void unlockAudio().then(() => speak(state.lastAiText, rate));
+}
+function hideUnlockBanner() {
+  if (!els.audioUnlock) return;
+  els.audioUnlock.hidden = true;
+  els.audioUnlock.classList.remove("needed");
+}
+function showUnlockBanner() {
+  if (!els.audioUnlock) return;
+  els.audioUnlock.hidden = false;
+  els.audioUnlock.classList.add("needed");
+}
+async function unlockAudio({ announce = false } = {}) {
+  await state.audio.unlock();
+  if (!state.audio.unlocked) {
+    if (announce) toast("\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0432\u0441\u0451 \u0435\u0449\u0451 \u0431\u043B\u043E\u043A\u0438\u0440\u0443\u0435\u0442 \u0437\u0432\u0443\u043A. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435, \u0447\u0442\u043E \u0432\u043A\u043B\u0430\u0434\u043A\u0430 \u043D\u0435 \u043E\u0442\u043A\u043B\u044E\u0447\u0435\u043D\u0430 (\u0438\u043A\u043E\u043D\u043A\u0430 \u0434\u0438\u043D\u0430\u043C\u0438\u043A\u0430).", "error", 6e3);
+    return false;
+  }
+  hideUnlockBanner();
+  if (announce) toast("\u0417\u0432\u0443\u043A \u0440\u0430\u0437\u0440\u0435\u0448\u0451\u043D", "success");
+  flushPendingSpeech();
+  return true;
+}
+function flushPendingSpeech() {
+  const pending = state.pendingSpeech;
+  state.pendingSpeech = null;
+  if (pending) void speak(pending.text, pending.rate);
 }
 async function speak(text, rate = 1) {
   if (!state.config.ttsEnabled || !text) return;
-  stopAudio();
+  state.audio.stop();
+  state.speaking = true;
+  state.capture?.pause();
+  let objectUrl = "";
   try {
     const response = await fetch("/api/practice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
-    if (!response.ok) throw new Error("tts");
+    if (!response.ok) throw new Error(`\u0441\u0435\u0440\u0432\u0435\u0440 \u043E\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u043D\u0438\u044F \u043E\u0442\u0432\u0435\u0442\u0438\u043B ${response.status}`);
     const blob = await response.blob();
-    const audio = new Audio(URL.createObjectURL(blob));
-    audio.playbackRate = rate;
-    state.currentAudio = audio;
-    await audio.play();
-    await new Promise((resolve) => {
-      audio.onended = resolve;
-      audio.onerror = resolve;
-    });
-  } catch {
+    objectUrl = URL.createObjectURL(blob);
+    await state.audio.play(objectUrl, { rate });
+  } catch (error) {
+    reportSpeakFailure(text, rate, error);
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    state.speaking = false;
+    setTimeout(() => state.capture?.resume(), 220);
   }
 }
-function stopAudio() {
-  if (state.currentAudio) {
-    state.currentAudio.pause();
-    state.currentAudio = null;
+function reportSpeakFailure(text, rate, error) {
+  if (isAutoplayBlocked(error)) {
+    state.pendingSpeech = { text, rate };
+    showUnlockBanner();
+    els.listenState.textContent = "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB, \u0447\u0442\u043E\u0431\u044B \u0443\u0441\u043B\u044B\u0448\u0430\u0442\u044C \u043E\u0442\u0432\u0435\u0442";
+    els.audioUnlock?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  } else {
+    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u2014 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u043A\u043D\u043E\u043F\u043A\u043E\u0439 \xAB\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0442\u0435\u043A\u0441\u0442\xBB";
   }
+  toast(describeAudioError(error), "error", 5e3);
+}
+function stopAudio() {
+  state.audio?.stop();
 }
 async function startMic() {
   if (state.micOn || !state.config.sttEnabled) return;
   try {
+    void unlockAudio();
     state.capture = await startVoiceCapture({
       deviceId: els.micSelect.value || "",
       fill: els.micMeterFill,
@@ -759,6 +1001,7 @@ function stopMic() {
   els.stopMicButton.hidden = true;
 }
 async function handleSegment(blob) {
+  if (state.speaking) return;
   try {
     const text = await transcribeAudio(blob, { path: "/api/practice/transcribe" });
     if (!text) {

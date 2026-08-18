@@ -77,7 +77,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'blob:'],
-      mediaSrc: ["'self'", 'blob:'],
+      mediaSrc: ["'self'", 'blob:', 'data:'],
       connectSrc: ["'self'", 'https://api.elevenlabs.io', 'wss://api.elevenlabs.io', 'https://api.aitunnel.ru'],
       fontSrc: ["'self'", 'data:']
     }

@@ -1,4 +1,7 @@
-import { $, esc, toast, setBusy, refreshMicrophoneSelect, startVoiceCapture, transcribeAudio } from './shared.js';
+import {
+  $, esc, toast, setBusy, refreshMicrophoneSelect, startVoiceCapture, transcribeAudio,
+  createAudioGate, unlockOnFirstGesture, describeAudioError, isAutoplayBlocked
+} from './shared.js';
 
 const PROGRESS_STORAGE_KEY = 'glc.practiceProgress.v1';
 const LEVEL_STORAGE_KEY = 'glc.practiceLevel';
@@ -19,7 +22,9 @@ const state = {
   capture: null,
   micOn: false,
   lastAiText: '',
-  currentAudio: null,
+  audio: null,
+  speaking: false,
+  pendingSpeech: null,
   pendingInputMethod: 'typed',
   progress: loadProgress()
 };
@@ -30,6 +35,11 @@ document.addEventListener('DOMContentLoaded', boot);
 
 async function boot() {
   cache();
+  state.audio = createAudioGate({ onChange: (unlocked) => { if (unlocked) hideUnlockBanner(); } });
+  // Playback is triggered after an await (the AI reply round-trip), so it is no
+  // longer inside the click that started it — browsers treat that as autoplay.
+  // Unlocking on the first interaction keeps every later reply audible.
+  unlockOnFirstGesture(state.audio, () => flushPendingSpeech());
   bind();
   try {
     const [curriculum, practice] = await Promise.all([
@@ -108,6 +118,7 @@ function cache() {
   els.typedForm = $('#typedForm');
   els.typedInput = $('#typedInput');
   els.sendTypedButton = $('#sendTypedButton');
+  els.audioUnlock = $('#audioUnlock');
 }
 
 function bind() {
@@ -115,7 +126,7 @@ function bind() {
   els.moduleSelect.addEventListener('change', () => { state.moduleId = Number(els.moduleSelect.value); onSetupChange(); });
   els.modeSelect.addEventListener('change', () => { state.mode = els.modeSelect.value; onSetupChange(); });
   els.scenarioSelect.addEventListener('change', () => { state.scenarioId = els.scenarioSelect.value; });
-  els.startButton.addEventListener('click', startSession);
+  els.startButton.addEventListener('click', () => { void unlockAudio().then(startSession); });
   els.resetProgressButton.addEventListener('click', resetCurrentLevelProgress);
 
   els.startMicButton.addEventListener('click', startMic);
@@ -125,6 +136,7 @@ function bind() {
   els.repeatButton.addEventListener('click', () => replay(1));
   els.slowerButton.addEventListener('click', () => replay(0.75));
   els.revealButton.addEventListener('click', revealText);
+  els.audioUnlock.addEventListener('click', () => unlockAudio({ announce: true }));
 
   els.typedForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -436,32 +448,84 @@ function revealText() {
 // ----- Text-to-speech -----
 
 function replay(rate) {
-  if (state.lastAiText) speak(state.lastAiText, rate);
+  if (!state.lastAiText) return;
+  // The click is a real gesture: use it to open audio before playing.
+  void unlockAudio().then(() => speak(state.lastAiText, rate));
+}
+
+function hideUnlockBanner() {
+  if (!els.audioUnlock) return;
+  els.audioUnlock.hidden = true;
+  els.audioUnlock.classList.remove('needed');
+}
+
+function showUnlockBanner() {
+  if (!els.audioUnlock) return;
+  els.audioUnlock.hidden = false;
+  els.audioUnlock.classList.add('needed');
+}
+
+async function unlockAudio({ announce = false } = {}) {
+  await state.audio.unlock();
+  if (!state.audio.unlocked) {
+    if (announce) toast('Браузер всё ещё блокирует звук. Проверьте, что вкладка не отключена (иконка динамика).', 'error', 6000);
+    return false;
+  }
+  hideUnlockBanner();
+  if (announce) toast('Звук разрешён', 'success');
+  flushPendingSpeech();
+  return true;
+}
+
+function flushPendingSpeech() {
+  const pending = state.pendingSpeech;
+  state.pendingSpeech = null;
+  if (pending) void speak(pending.text, pending.rate);
 }
 
 async function speak(text, rate = 1) {
   if (!state.config.ttsEnabled || !text) return;
-  stopAudio();
+  state.audio.stop();
+  state.speaking = true;
+  // Without this the microphone records the AI's own voice through the
+  // speakers and sends it back as the learner's answer.
+  state.capture?.pause();
+  let objectUrl = '';
   try {
     const response = await fetch('/api/practice/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text })
     });
-    if (!response.ok) throw new Error('tts');
+    if (!response.ok) throw new Error(`сервер озвучивания ответил ${response.status}`);
     const blob = await response.blob();
-    const audio = new Audio(URL.createObjectURL(blob));
-    audio.playbackRate = rate;
-    state.currentAudio = audio;
-    await audio.play();
-    await new Promise((resolve) => { audio.onended = resolve; audio.onerror = resolve; });
-  } catch {
-    // TTS optional — fail silently.
+    objectUrl = URL.createObjectURL(blob);
+    await state.audio.play(objectUrl, { rate });
+  } catch (error) {
+    reportSpeakFailure(text, rate, error);
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    state.speaking = false;
+    setTimeout(() => state.capture?.resume(), 220);
   }
 }
 
+// TTS used to fail silently, so a blocked or broken voice looked exactly like a
+// broken app. Say what happened and keep the phrase ready to replay.
+function reportSpeakFailure(text, rate, error) {
+  if (isAutoplayBlocked(error)) {
+    state.pendingSpeech = { text, rate };
+    showUnlockBanner();
+    els.listenState.textContent = 'Нажмите «Включить звук», чтобы услышать ответ';
+    els.audioUnlock?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  } else {
+    els.listenState.textContent = 'Звук недоступен — откройте текст кнопкой «Показать текст»';
+  }
+  toast(describeAudioError(error), 'error', 5000);
+}
+
 function stopAudio() {
-  if (state.currentAudio) { state.currentAudio.pause(); state.currentAudio = null; }
+  state.audio?.stop();
 }
 
 // ----- Voice input (Whisper) -----
@@ -469,6 +533,7 @@ function stopAudio() {
 async function startMic() {
   if (state.micOn || !state.config.sttEnabled) return;
   try {
+    void unlockAudio();
     state.capture = await startVoiceCapture({
       deviceId: els.micSelect.value || '',
       fill: els.micMeterFill,
@@ -499,6 +564,7 @@ function stopMic() {
 }
 
 async function handleSegment(blob) {
+  if (state.speaking) return;
   try {
     const text = await transcribeAudio(blob, { path: '/api/practice/transcribe' });
     if (!text) { els.liveTranscript.textContent = '🔇 Не расслышал. Повторите.'; return; }

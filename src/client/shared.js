@@ -506,3 +506,258 @@ export async function startMicrophoneMeter({ deviceId = '', fill, value, signal,
     }
   };
 }
+
+// ---------------------------------------------------------------------------
+// Audio playback gate
+//
+// Browsers refuse programmatic playback until the user has interacted with the
+// page ("play() failed because the user didn't interact with the document
+// first"). Two things make that bite here:
+//   * a student who opens a personal link goes straight into the lesson, so no
+//     click ever happens before the teacher pushes the first phrase;
+//   * iOS/Safari does not accept a page-wide interaction — it only trusts an
+//     <audio> element that was already started inside a real gesture.
+// So both pages share ONE element that is unlocked on the first gesture and
+// then reused for every phrase.
+// ---------------------------------------------------------------------------
+
+let silentClip = '';
+
+function silentClipUrl(seconds = 0.05, sampleRate = 8000) {
+  if (silentClip) return silentClip;
+  const frames = Math.max(1, Math.round(seconds * sampleRate));
+  const buffer = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + frames * 2, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, 'data');
+  view.setUint32(40, frames * 2, true);
+  silentClip = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  return silentClip;
+}
+
+export function isAutoplayBlocked(error) {
+  if (!error) return false;
+  if (error.name === 'NotAllowedError') return true;
+  return /didn'?t interact|user gesture|user activation|not allowed|autoplay/i.test(String(error.message || ''));
+}
+
+export function describeAudioError(error) {
+  if (isAutoplayBlocked(error)) return 'Браузер заблокировал звук. Нажмите «Включить звук» один раз — дальше всё играет само.';
+  if (error?.name === 'NotSupportedError') return 'Браузер не смог проиграть это аудио. Обновите страницу или используйте Chrome/Safari посвежее.';
+  return `Не удалось воспроизвести аудио: ${error?.message || 'неизвестная ошибка'}`;
+}
+
+export function createAudioGate({ onChange = () => {} } = {}) {
+  let element = null;
+  let context = null;
+  let unlocked = false;
+  let pending = null;
+  let unlocking = null;
+
+  const ensureElement = () => {
+    if (element) return element;
+    element = new Audio();
+    element.preload = 'auto';
+    element.playsInline = true;
+    element.setAttribute('playsinline', '');
+    return element;
+  };
+
+  const markUnlocked = () => {
+    if (unlocked) return;
+    unlocked = true;
+    try { onChange(true); } catch {}
+  };
+
+  // Safari also gates speechSynthesis behind a gesture; a muted throwaway
+  // utterance inside the unlock click is enough to open it.
+  const primeSpeech = () => {
+    if (!('speechSynthesis' in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(' ');
+      utterance.volume = 0;
+      utterance.lang = 'de-DE';
+      speechSynthesis.speak(utterance);
+      speechSynthesis.cancel();
+    } catch {}
+  };
+
+  async function runUnlock() {
+    const el = ensureElement();
+    // Everything that needs the gesture is started before the first await:
+    // Safari only counts a call made in the same task as the click.
+    let started = null;
+    try {
+      el.src = silentClipUrl();
+      started = el.play();
+    } catch {}
+    primeSpeech();
+
+    try {
+      await started;
+      el.pause();
+      try { el.currentTime = 0; } catch {}
+      markUnlocked();
+    } catch {}
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      try {
+        context = context || new AudioContextClass();
+        if (context.state === 'suspended') await context.resume();
+        const source = context.createBufferSource();
+        source.buffer = context.createBuffer(1, 1, 22050);
+        source.connect(context.destination);
+        source.start(0);
+      } catch {}
+    }
+    return unlocked;
+  }
+
+  const clearPending = (mode = 'resolve', error = null) => {
+    const current = pending;
+    pending = null;
+    if (!current) return;
+    current.cleanup();
+    if (mode === 'reject') current.reject(error || new Error('Воспроизведение прервано'));
+    else current.resolve();
+  };
+
+  return {
+    get unlocked() { return unlocked; },
+    get element() { return ensureElement(); },
+
+    // Call this synchronously from a real user gesture (click/tap/keydown).
+    // Concurrent calls (the document-wide listener and the banner click fire
+    // together) share one attempt instead of interrupting each other.
+    unlock() {
+      if (unlocked) return Promise.resolve(true);
+      if (unlocking) return unlocking;
+      unlocking = runUnlock().finally(() => { unlocking = null; });
+      return unlocking;
+    },
+
+    // Resolves when the clip finishes; rejects with the browser error when the
+    // browser refuses to start it, so callers can offer the unlock button.
+    async play(url, { rate = 1 } = {}) {
+      const el = ensureElement();
+      clearPending('resolve');
+      try { el.pause(); } catch {}
+      el.src = url;
+      try { el.load(); } catch {}
+      el.playbackRate = rate;
+      await el.play();
+      markUnlocked();
+      try { el.playbackRate = rate; } catch {}
+      return new Promise((resolve, reject) => {
+        const onEnded = () => clearPending('resolve');
+        const onError = () => clearPending('reject', new Error('Аудио не загрузилось'));
+        const cleanup = () => {
+          el.removeEventListener('ended', onEnded);
+          el.removeEventListener('error', onError);
+        };
+        pending = { resolve, reject, cleanup };
+        el.addEventListener('ended', onEnded);
+        el.addEventListener('error', onError);
+        // A very short clip can finish before the listeners are attached.
+        if (el.ended) clearPending('resolve');
+      });
+    },
+
+    stop() {
+      clearPending('resolve');
+      if (element) {
+        try { element.pause(); } catch {}
+      }
+      if ('speechSynthesis' in window) {
+        try { speechSynthesis.cancel(); } catch {}
+      }
+    }
+  };
+}
+
+// Watches for any interaction anywhere on the page and uses it to unlock audio,
+// even if the learner never presses the unlock banner. It keeps watching until
+// an attempt actually succeeds.
+export function unlockOnFirstGesture(gate, done = () => {}) {
+  const events = ['pointerdown', 'touchstart', 'keydown'];
+  const detach = () => events.forEach((name) => document.removeEventListener(name, handler, true));
+  function handler() {
+    Promise.resolve(gate.unlock())
+      .then(() => {
+        // A failed attempt keeps the listeners alive so the next tap can retry.
+        if (!gate.unlocked) return;
+        detach();
+        done(true);
+      })
+      .catch(() => {});
+  }
+  events.forEach((name) => document.addEventListener(name, handler, true));
+  return detach;
+}
+
+// getVoices() is empty on the first call in Chrome — the list arrives later via
+// the voiceschanged event, which is why German phrases used to be read out with
+// a Russian or English voice.
+export async function loadGermanVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  let voices = speechSynthesis.getVoices();
+  if (!voices.length) {
+    voices = await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve(speechSynthesis.getVoices());
+      };
+      speechSynthesis.addEventListener?.('voiceschanged', finish, { once: true });
+      setTimeout(finish, 1500);
+    });
+  }
+  const german = voices.filter((voice) => voice.lang?.toLowerCase().startsWith('de'));
+  return german.find((voice) => voice.localService) || german[0] || null;
+}
+
+export function speakWithBrowser(text, rate = 1, voice = null) {
+  return new Promise((resolve, reject) => {
+    if (!('speechSynthesis' in window)) return reject(new Error('Голос браузера не поддерживается'));
+    let settled = false;
+    let keepAlive = 0;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(keepAlive);
+      clearTimeout(watchdog);
+      if (error) reject(error); else resolve();
+    };
+    try { speechSynthesis.cancel(); } catch {}
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'de-DE';
+    utterance.rate = Math.max(0.6, Math.min(1.1, rate));
+    if (voice) utterance.voice = voice;
+    utterance.onend = () => finish();
+    utterance.onerror = (event) => finish(
+      event?.error === 'not-allowed'
+        ? Object.assign(new Error('Браузер заблокировал голос'), { name: 'NotAllowedError' })
+        : new Error('Голос браузера недоступен')
+    );
+    // Chrome silently stops long utterances after ~15s unless nudged, and it
+    // sometimes never fires onend at all — the watchdog keeps the UI moving.
+    keepAlive = setInterval(() => { try { speechSynthesis.resume(); } catch {} }, 9000);
+    const watchdog = setTimeout(() => finish(), Math.max(8000, text.length * 140));
+    speechSynthesis.speak(utterance);
+  });
+}

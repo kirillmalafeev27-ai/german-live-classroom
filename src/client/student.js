@@ -1,6 +1,8 @@
 import {
   api, $, esc, toast, setBusy, getQuery, storageKeys, mediaStorageKeys,
-  refreshMicrophoneSelect, startVoiceCapture, transcribeAudio
+  refreshMicrophoneSelect, startVoiceCapture, transcribeAudio,
+  createAudioGate, unlockOnFirstGesture, describeAudioError, isAutoplayBlocked,
+  loadGermanVoice, speakWithBrowser
 } from './shared.js';
 
 const query = getQuery();
@@ -15,10 +17,11 @@ const state = {
   capture: null,
   micStarted: false,
   currentSpeech: null,
-  currentAudio: null,
+  pendingSpeech: null,
+  audio: null,
+  germanVoice: null,
   playing: false,
   committedHistory: [],
-  unlocked: false,
   selectedMicId: localStorage.getItem(mediaStorageKeys.studentMic) || '',
   micRestarting: false
 };
@@ -70,9 +73,16 @@ function cacheElements() {
 
 async function boot() {
   cacheElements();
+  state.audio = createAudioGate({
+    onChange: (unlocked) => { if (unlocked) hideUnlockBanner(); }
+  });
+  // A personal link drops the learner straight into the lesson, so the first
+  // phrase can arrive before any click. Catch the very first interaction —
+  // whatever it is — and use it to open audio playback.
+  unlockOnFirstGesture(state.audio, () => flushPendingSpeech());
   bindEvents();
   els.joinCode.value = state.roomCode;
-  try { state.config = await api('/api/config'); } catch {}
+  state.config = await loadConfig();
 
   if (state.roomCode && state.token) {
     try {
@@ -86,6 +96,19 @@ async function boot() {
     }
   }
   showJoin();
+}
+
+// /api/config decides whether the microphone button stays enabled, so one flaky
+// request must not leave a working room without speech recognition.
+async function loadConfig(attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await api('/api/config');
+    } catch {
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+    }
+  }
+  return null;
 }
 
 function bindEvents() {
@@ -111,13 +134,37 @@ function bindEvents() {
   els.keywordButton.addEventListener('click', () => reveal('keyword'));
   els.starterButton.addEventListener('click', () => reveal('starter'));
   els.transcriptButton.addEventListener('click', () => reveal('transcript'));
-  els.audioUnlock.addEventListener('click', () => {
-    state.unlocked = true;
-    els.audioUnlock.hidden = true;
-    const audio = new Audio();
-    audio.play().catch(() => {});
-    toast('Звук разрешён', 'success');
-  });
+  els.audioUnlock.addEventListener('click', () => unlockAudio({ announce: true }));
+}
+
+// ----- Audio unlock -----
+
+function hideUnlockBanner() {
+  els.audioUnlock.hidden = true;
+  els.audioUnlock.classList.remove('needed');
+}
+
+function showUnlockBanner() {
+  els.audioUnlock.hidden = false;
+  els.audioUnlock.classList.add('needed');
+}
+
+async function unlockAudio({ announce = false } = {}) {
+  await state.audio.unlock();
+  if (!state.audio.unlocked) {
+    if (announce) toast('Браузер всё ещё блокирует звук. Проверьте, что вкладка не отключена (иконка динамика).', 'error', 6000);
+    return false;
+  }
+  hideUnlockBanner();
+  if (announce) toast('Звук разрешён', 'success');
+  flushPendingSpeech();
+  return true;
+}
+
+function flushPendingSpeech() {
+  const pending = state.pendingSpeech;
+  state.pendingSpeech = null;
+  if (pending) void playSpeech(pending, Number(pending.playbackRate || 1));
 }
 
 function showJoin() {
@@ -130,6 +177,8 @@ async function joinRoom(event) {
   const code = els.joinCode.value.trim().toUpperCase();
   const pin = els.joinPin.value.trim();
   if (!code || !pin) return toast('Введите код комнаты и PIN', 'error');
+  // Submitting the form is a genuine gesture — the best moment to open audio.
+  void unlockAudio();
   setBusy(els.joinButton, true, 'Подключаемся…');
   try {
     const result = await api('/api/sessions/join', { method: 'POST', body: { code, pin } });
@@ -162,11 +211,17 @@ function enterLesson() {
   els.lessonTitle.textContent = `${state.lesson?.id || ''}. ${state.lesson?.title || 'Урок немецкого'}`;
   els.levelLabel.textContent = state.profile?.level || 'A0';
   els.listenCard.classList.remove('speaking');
+  if (state.audio?.unlocked) hideUnlockBanner(); else showUnlockBanner();
   setConnection('Подключаемся…', 'pending');
   refreshStudentMicrophones();
-  if (!state.config?.sttEnabled) {
+  if (state.config && !state.config.sttEnabled) {
     els.startMicButton.disabled = true;
     els.micStatus.textContent = 'Распознавание речи не настроено — используйте текстовое поле';
+    els.micStatus.className = 'status-badge warn';
+  } else if (!state.config) {
+    // Config could not be read; keep the microphone usable and let the actual
+    // recognition request report the real problem if there is one.
+    els.micStatus.textContent = 'Настройки сервера недоступны — микрофон можно попробовать';
     els.micStatus.className = 'status-badge warn';
   }
 }
@@ -187,6 +242,7 @@ function connectSocket() {
   state.socket.on('student:speak', handleSpeech);
   state.socket.on('session:ended', ({ summary }) => {
     stopMicrophone();
+    state.audio?.stop();
     els.endedPanel.hidden = false;
     els.endedSummary.textContent = summary?.summary_ru || 'Урок завершён. Спасибо!';
     els.listenCard.hidden = true;
@@ -203,7 +259,7 @@ async function refreshStudentMicrophones() {
   try {
     await refreshMicrophoneSelect(els.micSelect, state.selectedMicId);
     state.selectedMicId = els.micSelect.value;
-  } catch (error) {
+  } catch {
     els.micSelect.innerHTML = '<option value="">Не удалось получить список</option>';
     els.micSelect.disabled = true;
   }
@@ -216,8 +272,7 @@ async function startMicrophone() {
   }
   setBusy(els.startMicButton, true, 'Запускаем…');
   try {
-    state.unlocked = true;
-    els.audioUnlock.hidden = true;
+    void unlockAudio();
     state.selectedMicId = els.micSelect.value || state.selectedMicId;
     localStorage.setItem(mediaStorageKeys.studentMic, state.selectedMicId);
 
@@ -250,10 +305,29 @@ async function startMicrophone() {
   } catch (error) {
     state.capture?.stop();
     state.capture = null;
-    toast(`Не удалось включить микрофон: ${error.message}`, 'error', 6000);
+    els.micStatus.textContent = describeMicError(error);
+    els.micStatus.className = 'status-badge error';
+    toast(describeMicError(error), 'error', 6000);
   } finally {
     setBusy(els.startMicButton, false);
   }
+}
+
+function describeMicError(error) {
+  const name = error?.name || '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Доступ к микрофону запрещён. Разрешите его в настройках браузера для этого сайта.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'Микрофон не найден. Подключите гарнитуру и выберите её в списке.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Микрофон занят другой программой (Zoom, Skype). Закройте её и попробуйте снова.';
+  }
+  if (!window.isSecureContext) {
+    return 'Микрофон работает только по HTTPS. Откройте сайт по защищённой ссылке.';
+  }
+  return `Не удалось включить микрофон: ${error?.message || 'неизвестная ошибка'}`;
 }
 
 async function handleStudentSegment(blob) {
@@ -314,6 +388,8 @@ function commitText(text, done = () => {}) {
   });
 }
 
+// ----- Playback -----
+
 async function handleSpeech(payload) {
   state.currentSpeech = payload;
   resetReveal();
@@ -325,7 +401,7 @@ async function handleSpeech(payload) {
 
 async function playSpeech(payload, rate = 1) {
   if (!payload?.text) return;
-  stopCurrentAudio();
+  state.audio.stop();
   state.playing = true;
   state.capture?.pause();
   els.listenCard.classList.add('speaking');
@@ -333,58 +409,42 @@ async function playSpeech(payload, rate = 1) {
 
   try {
     if (payload.mode === 'elevenlabs' && payload.audioUrl) {
-      const audio = new Audio(payload.audioUrl);
-      state.currentAudio = audio;
-      audio.playbackRate = rate;
-      audio.preload = 'auto';
-      await audio.play();
-      await new Promise((resolve, reject) => {
-        audio.onended = resolve;
-        audio.onerror = () => reject(new Error('Не удалось воспроизвести аудио'));
-      });
+      await state.audio.play(payload.audioUrl, { rate });
     } else {
-      await speakWithBrowser(payload.text, rate);
+      if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+      await speakWithBrowser(payload.text, rate, state.germanVoice);
     }
-    els.listenState.textContent = payload.source === 'teacher_mic' ? 'Выполните команду или ответьте' : 'Теперь ответьте по-немецки';
+    els.listenState.textContent = payload.source === 'teacher_mic'
+      ? 'Выполните команду или ответьте'
+      : 'Теперь ответьте по-немецки';
   } catch (error) {
-    els.listenState.textContent = 'Нажмите «Повторить», чтобы включить звук';
-    els.audioUnlock.hidden = false;
-    toast(error.message, 'error');
+    reportPlaybackFailure(payload, error);
   } finally {
     state.playing = false;
-    state.currentAudio = null;
     els.listenCard.classList.remove('speaking');
     setTimeout(() => state.capture?.resume(), 220);
   }
 }
 
-function speakWithBrowser(text, rate) {
-  return new Promise((resolve, reject) => {
-    if (!('speechSynthesis' in window)) return reject(new Error('Голос браузера не поддерживается'));
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'de-DE';
-    utterance.rate = Math.max(0.6, Math.min(1.1, rate));
-    const germanVoice = speechSynthesis.getVoices().find((voice) => voice.lang?.toLowerCase().startsWith('de'));
-    if (germanVoice) utterance.voice = germanVoice;
-    utterance.onend = resolve;
-    utterance.onerror = () => reject(new Error('Голос браузера недоступен'));
-    speechSynthesis.speak(utterance);
-  });
-}
-
-function stopCurrentAudio() {
-  if (state.currentAudio) {
-    state.currentAudio.pause();
-    state.currentAudio.currentTime = 0;
+function reportPlaybackFailure(payload, error) {
+  if (isAutoplayBlocked(error)) {
+    // Keep the phrase so the unlock click plays it instead of losing the turn.
+    state.pendingSpeech = payload;
+    showUnlockBanner();
+    els.listenState.textContent = 'Нажмите «Включить звук», чтобы услышать преподавателя';
+    els.audioUnlock.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  } else {
+    els.listenState.textContent = 'Звук не воспроизвёлся — нажмите «Повторить»';
   }
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  toast(describeAudioError(error), 'error', 6000);
 }
 
 function replay(rate, action) {
   if (!state.currentSpeech) return;
   state.socket?.emit('student:assist', { action });
-  playSpeech(state.currentSpeech, rate);
+  // Start playback straight from the click: that gesture is what unlocks the
+  // shared <audio> element on iOS, so no separate unlock step is needed here.
+  void playSpeech(state.currentSpeech, rate);
 }
 
 function resetReveal() {

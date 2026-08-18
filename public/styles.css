@@ -254,6 +254,8 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 .student-title p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .student-head-status { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
 .audio-unlock { width: 100%; min-height: 54px; border: 1px solid #e0b251; border-radius: 14px; background: #fff3d9; color: #7c5406; font-weight: 850; }
+.audio-unlock.needed { border-color: #d98324; background: #ffe9c9; animation: unlock-pulse 1.4s infinite; }
+@keyframes unlock-pulse { 50% { box-shadow: 0 0 0 6px rgba(217,131,36,.16); } }
 .mic-card { padding: 20px; }
 .mic-top { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .mic-controls { display: flex; gap: 8px; }

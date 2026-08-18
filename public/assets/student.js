@@ -345,6 +345,253 @@ async function startVoiceCapture({
     }
   };
 }
+var silentClip = "";
+function silentClipUrl(seconds = 0.05, sampleRate = 8e3) {
+  if (silentClip) return silentClip;
+  const frames = Math.max(1, Math.round(seconds * sampleRate));
+  const buffer = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + frames * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, frames * 2, true);
+  silentClip = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  return silentClip;
+}
+function isAutoplayBlocked(error) {
+  if (!error) return false;
+  if (error.name === "NotAllowedError") return true;
+  return /didn'?t interact|user gesture|user activation|not allowed|autoplay/i.test(String(error.message || ""));
+}
+function describeAudioError(error) {
+  if (isAutoplayBlocked(error)) return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0437\u0432\u0443\u043A. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u2014 \u0434\u0430\u043B\u044C\u0448\u0435 \u0432\u0441\u0451 \u0438\u0433\u0440\u0430\u0435\u0442 \u0441\u0430\u043C\u043E.";
+  if (error?.name === "NotSupportedError") return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043D\u0435 \u0441\u043C\u043E\u0433 \u043F\u0440\u043E\u0438\u0433\u0440\u0430\u0442\u044C \u044D\u0442\u043E \u0430\u0443\u0434\u0438\u043E. \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438\u043B\u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 Chrome/Safari \u043F\u043E\u0441\u0432\u0435\u0436\u0435\u0435.";
+  return `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0430\u0443\u0434\u0438\u043E: ${error?.message || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430"}`;
+}
+function createAudioGate({ onChange = () => {
+} } = {}) {
+  let element = null;
+  let context = null;
+  let unlocked = false;
+  let pending = null;
+  let unlocking = null;
+  const ensureElement = () => {
+    if (element) return element;
+    element = new Audio();
+    element.preload = "auto";
+    element.playsInline = true;
+    element.setAttribute("playsinline", "");
+    return element;
+  };
+  const markUnlocked = () => {
+    if (unlocked) return;
+    unlocked = true;
+    try {
+      onChange(true);
+    } catch {
+    }
+  };
+  const primeSpeech = () => {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(" ");
+      utterance.volume = 0;
+      utterance.lang = "de-DE";
+      speechSynthesis.speak(utterance);
+      speechSynthesis.cancel();
+    } catch {
+    }
+  };
+  async function runUnlock() {
+    const el = ensureElement();
+    let started = null;
+    try {
+      el.src = silentClipUrl();
+      started = el.play();
+    } catch {
+    }
+    primeSpeech();
+    try {
+      await started;
+      el.pause();
+      try {
+        el.currentTime = 0;
+      } catch {
+      }
+      markUnlocked();
+    } catch {
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      try {
+        context = context || new AudioContextClass();
+        if (context.state === "suspended") await context.resume();
+        const source = context.createBufferSource();
+        source.buffer = context.createBuffer(1, 1, 22050);
+        source.connect(context.destination);
+        source.start(0);
+      } catch {
+      }
+    }
+    return unlocked;
+  }
+  const clearPending = (mode = "resolve", error = null) => {
+    const current = pending;
+    pending = null;
+    if (!current) return;
+    current.cleanup();
+    if (mode === "reject") current.reject(error || new Error("\u0412\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0434\u0435\u043D\u0438\u0435 \u043F\u0440\u0435\u0440\u0432\u0430\u043D\u043E"));
+    else current.resolve();
+  };
+  return {
+    get unlocked() {
+      return unlocked;
+    },
+    get element() {
+      return ensureElement();
+    },
+    // Call this synchronously from a real user gesture (click/tap/keydown).
+    // Concurrent calls (the document-wide listener and the banner click fire
+    // together) share one attempt instead of interrupting each other.
+    unlock() {
+      if (unlocked) return Promise.resolve(true);
+      if (unlocking) return unlocking;
+      unlocking = runUnlock().finally(() => {
+        unlocking = null;
+      });
+      return unlocking;
+    },
+    // Resolves when the clip finishes; rejects with the browser error when the
+    // browser refuses to start it, so callers can offer the unlock button.
+    async play(url, { rate = 1 } = {}) {
+      const el = ensureElement();
+      clearPending("resolve");
+      try {
+        el.pause();
+      } catch {
+      }
+      el.src = url;
+      try {
+        el.load();
+      } catch {
+      }
+      el.playbackRate = rate;
+      await el.play();
+      markUnlocked();
+      try {
+        el.playbackRate = rate;
+      } catch {
+      }
+      return new Promise((resolve, reject) => {
+        const onEnded = () => clearPending("resolve");
+        const onError = () => clearPending("reject", new Error("\u0410\u0443\u0434\u0438\u043E \u043D\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u043B\u043E\u0441\u044C"));
+        const cleanup = () => {
+          el.removeEventListener("ended", onEnded);
+          el.removeEventListener("error", onError);
+        };
+        pending = { resolve, reject, cleanup };
+        el.addEventListener("ended", onEnded);
+        el.addEventListener("error", onError);
+        if (el.ended) clearPending("resolve");
+      });
+    },
+    stop() {
+      clearPending("resolve");
+      if (element) {
+        try {
+          element.pause();
+        } catch {
+        }
+      }
+      if ("speechSynthesis" in window) {
+        try {
+          speechSynthesis.cancel();
+        } catch {
+        }
+      }
+    }
+  };
+}
+function unlockOnFirstGesture(gate, done = () => {
+}) {
+  const events = ["pointerdown", "touchstart", "keydown"];
+  const detach = () => events.forEach((name) => document.removeEventListener(name, handler, true));
+  function handler() {
+    Promise.resolve(gate.unlock()).then(() => {
+      if (!gate.unlocked) return;
+      detach();
+      done(true);
+    }).catch(() => {
+    });
+  }
+  events.forEach((name) => document.addEventListener(name, handler, true));
+  return detach;
+}
+async function loadGermanVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  let voices = speechSynthesis.getVoices();
+  if (!voices.length) {
+    voices = await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve(speechSynthesis.getVoices());
+      };
+      speechSynthesis.addEventListener?.("voiceschanged", finish, { once: true });
+      setTimeout(finish, 1500);
+    });
+  }
+  const german = voices.filter((voice) => voice.lang?.toLowerCase().startsWith("de"));
+  return german.find((voice) => voice.localService) || german[0] || null;
+}
+function speakWithBrowser(text, rate = 1, voice = null) {
+  return new Promise((resolve, reject) => {
+    if (!("speechSynthesis" in window)) return reject(new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F"));
+    let settled = false;
+    let keepAlive = 0;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(keepAlive);
+      clearTimeout(watchdog);
+      if (error) reject(error);
+      else resolve();
+    };
+    try {
+      speechSynthesis.cancel();
+    } catch {
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "de-DE";
+    utterance.rate = Math.max(0.6, Math.min(1.1, rate));
+    if (voice) utterance.voice = voice;
+    utterance.onend = () => finish();
+    utterance.onerror = (event) => finish(
+      event?.error === "not-allowed" ? Object.assign(new Error("\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0433\u043E\u043B\u043E\u0441"), { name: "NotAllowedError" }) : new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D")
+    );
+    keepAlive = setInterval(() => {
+      try {
+        speechSynthesis.resume();
+      } catch {
+      }
+    }, 9e3);
+    const watchdog = setTimeout(() => finish(), Math.max(8e3, text.length * 140));
+    speechSynthesis.speak(utterance);
+  });
+}
 
 // src/client/student.js
 var query = getQuery();
@@ -359,10 +606,11 @@ var state = {
   capture: null,
   micStarted: false,
   currentSpeech: null,
-  currentAudio: null,
+  pendingSpeech: null,
+  audio: null,
+  germanVoice: null,
   playing: false,
   committedHistory: [],
-  unlocked: false,
   selectedMicId: localStorage.getItem(mediaStorageKeys.studentMic) || "",
   micRestarting: false
 };
@@ -410,12 +658,15 @@ function cacheElements() {
 }
 async function boot() {
   cacheElements();
+  state.audio = createAudioGate({
+    onChange: (unlocked) => {
+      if (unlocked) hideUnlockBanner();
+    }
+  });
+  unlockOnFirstGesture(state.audio, () => flushPendingSpeech());
   bindEvents();
   els.joinCode.value = state.roomCode;
-  try {
-    state.config = await api("/api/config");
-  } catch {
-  }
+  state.config = await loadConfig();
   if (state.roomCode && state.token) {
     try {
       await loadSession();
@@ -428,6 +679,16 @@ async function boot() {
     }
   }
   showJoin();
+}
+async function loadConfig(attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await api("/api/config");
+    } catch {
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+    }
+  }
+  return null;
 }
 function bindEvents() {
   els.joinForm.addEventListener("submit", joinRoom);
@@ -452,14 +713,31 @@ function bindEvents() {
   els.keywordButton.addEventListener("click", () => reveal("keyword"));
   els.starterButton.addEventListener("click", () => reveal("starter"));
   els.transcriptButton.addEventListener("click", () => reveal("transcript"));
-  els.audioUnlock.addEventListener("click", () => {
-    state.unlocked = true;
-    els.audioUnlock.hidden = true;
-    const audio = new Audio();
-    audio.play().catch(() => {
-    });
-    toast("\u0417\u0432\u0443\u043A \u0440\u0430\u0437\u0440\u0435\u0448\u0451\u043D", "success");
-  });
+  els.audioUnlock.addEventListener("click", () => unlockAudio({ announce: true }));
+}
+function hideUnlockBanner() {
+  els.audioUnlock.hidden = true;
+  els.audioUnlock.classList.remove("needed");
+}
+function showUnlockBanner() {
+  els.audioUnlock.hidden = false;
+  els.audioUnlock.classList.add("needed");
+}
+async function unlockAudio({ announce = false } = {}) {
+  await state.audio.unlock();
+  if (!state.audio.unlocked) {
+    if (announce) toast("\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0432\u0441\u0451 \u0435\u0449\u0451 \u0431\u043B\u043E\u043A\u0438\u0440\u0443\u0435\u0442 \u0437\u0432\u0443\u043A. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435, \u0447\u0442\u043E \u0432\u043A\u043B\u0430\u0434\u043A\u0430 \u043D\u0435 \u043E\u0442\u043A\u043B\u044E\u0447\u0435\u043D\u0430 (\u0438\u043A\u043E\u043D\u043A\u0430 \u0434\u0438\u043D\u0430\u043C\u0438\u043A\u0430).", "error", 6e3);
+    return false;
+  }
+  hideUnlockBanner();
+  if (announce) toast("\u0417\u0432\u0443\u043A \u0440\u0430\u0437\u0440\u0435\u0448\u0451\u043D", "success");
+  flushPendingSpeech();
+  return true;
+}
+function flushPendingSpeech() {
+  const pending = state.pendingSpeech;
+  state.pendingSpeech = null;
+  if (pending) void playSpeech(pending, Number(pending.playbackRate || 1));
 }
 function showJoin() {
   els.joinView.hidden = false;
@@ -470,6 +748,7 @@ async function joinRoom(event) {
   const code = els.joinCode.value.trim().toUpperCase();
   const pin = els.joinPin.value.trim();
   if (!code || !pin) return toast("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043A\u043E\u0434 \u043A\u043E\u043C\u043D\u0430\u0442\u044B \u0438 PIN", "error");
+  void unlockAudio();
   setBusy(els.joinButton, true, "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u0435\u043C\u0441\u044F\u2026");
   try {
     const result = await api("/api/sessions/join", { method: "POST", body: { code, pin } });
@@ -500,11 +779,16 @@ function enterLesson() {
   els.lessonTitle.textContent = `${state.lesson?.id || ""}. ${state.lesson?.title || "\u0423\u0440\u043E\u043A \u043D\u0435\u043C\u0435\u0446\u043A\u043E\u0433\u043E"}`;
   els.levelLabel.textContent = state.profile?.level || "A0";
   els.listenCard.classList.remove("speaking");
+  if (state.audio?.unlocked) hideUnlockBanner();
+  else showUnlockBanner();
   setConnection("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u0435\u043C\u0441\u044F\u2026", "pending");
   refreshStudentMicrophones();
-  if (!state.config?.sttEnabled) {
+  if (state.config && !state.config.sttEnabled) {
     els.startMicButton.disabled = true;
     els.micStatus.textContent = "\u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u0432\u0430\u043D\u0438\u0435 \u0440\u0435\u0447\u0438 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E \u2014 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442\u043E\u0432\u043E\u0435 \u043F\u043E\u043B\u0435";
+    els.micStatus.className = "status-badge warn";
+  } else if (!state.config) {
+    els.micStatus.textContent = "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u0435\u0440\u0432\u0435\u0440\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B \u2014 \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043C\u043E\u0436\u043D\u043E \u043F\u043E\u043F\u0440\u043E\u0431\u043E\u0432\u0430\u0442\u044C";
     els.micStatus.className = "status-badge warn";
   }
 }
@@ -524,6 +808,7 @@ function connectSocket() {
   state.socket.on("student:speak", handleSpeech);
   state.socket.on("session:ended", ({ summary }) => {
     stopMicrophone();
+    state.audio?.stop();
     els.endedPanel.hidden = false;
     els.endedSummary.textContent = summary?.summary_ru || "\u0423\u0440\u043E\u043A \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043D. \u0421\u043F\u0430\u0441\u0438\u0431\u043E!";
     els.listenCard.hidden = true;
@@ -538,7 +823,7 @@ async function refreshStudentMicrophones() {
   try {
     await refreshMicrophoneSelect(els.micSelect, state.selectedMicId);
     state.selectedMicId = els.micSelect.value;
-  } catch (error) {
+  } catch {
     els.micSelect.innerHTML = '<option value="">\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A</option>';
     els.micSelect.disabled = true;
   }
@@ -550,8 +835,7 @@ async function startMicrophone() {
   }
   setBusy(els.startMicButton, true, "\u0417\u0430\u043F\u0443\u0441\u043A\u0430\u0435\u043C\u2026");
   try {
-    state.unlocked = true;
-    els.audioUnlock.hidden = true;
+    void unlockAudio();
     state.selectedMicId = els.micSelect.value || state.selectedMicId;
     localStorage.setItem(mediaStorageKeys.studentMic, state.selectedMicId);
     state.capture?.stop();
@@ -582,10 +866,28 @@ async function startMicrophone() {
   } catch (error) {
     state.capture?.stop();
     state.capture = null;
-    toast(`\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D: ${error.message}`, "error", 6e3);
+    els.micStatus.textContent = describeMicError(error);
+    els.micStatus.className = "status-badge error";
+    toast(describeMicError(error), "error", 6e3);
   } finally {
     setBusy(els.startMicButton, false);
   }
+}
+function describeMicError(error) {
+  const name = error?.name || "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "\u0414\u043E\u0441\u0442\u0443\u043F \u043A \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0443 \u0437\u0430\u043F\u0440\u0435\u0449\u0451\u043D. \u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 \u0435\u0433\u043E \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u0434\u043B\u044F \u044D\u0442\u043E\u0433\u043E \u0441\u0430\u0439\u0442\u0430.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D. \u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u0435 \u0433\u0430\u0440\u043D\u0438\u0442\u0443\u0440\u0443 \u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0435\u0451 \u0432 \u0441\u043F\u0438\u0441\u043A\u0435.";
+  }
+  if (name === "NotReadableError") {
+    return "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0437\u0430\u043D\u044F\u0442 \u0434\u0440\u0443\u0433\u043E\u0439 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u043E\u0439 (Zoom, Skype). \u0417\u0430\u043A\u0440\u043E\u0439\u0442\u0435 \u0435\u0451 \u0438 \u043F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0441\u043D\u043E\u0432\u0430.";
+  }
+  if (!window.isSecureContext) {
+    return "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u043F\u043E HTTPS. \u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0441\u0430\u0439\u0442 \u043F\u043E \u0437\u0430\u0449\u0438\u0449\u0451\u043D\u043D\u043E\u0439 \u0441\u0441\u044B\u043B\u043A\u0435.";
+  }
+  return `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D: ${error?.message || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430"}`;
 }
 async function handleStudentSegment(blob) {
   if (state.playing) return;
@@ -652,62 +954,42 @@ async function handleSpeech(payload) {
 }
 async function playSpeech(payload, rate = 1) {
   if (!payload?.text) return;
-  stopCurrentAudio();
+  state.audio.stop();
   state.playing = true;
   state.capture?.pause();
   els.listenCard.classList.add("speaking");
   els.listenState.textContent = payload.source === "teacher_mic" ? "\u0421\u043B\u0443\u0448\u0430\u0439\u0442\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0443\u2026" : "\u0421\u043B\u0443\u0448\u0430\u0439\u0442\u0435\u2026";
   try {
     if (payload.mode === "elevenlabs" && payload.audioUrl) {
-      const audio = new Audio(payload.audioUrl);
-      state.currentAudio = audio;
-      audio.playbackRate = rate;
-      audio.preload = "auto";
-      await audio.play();
-      await new Promise((resolve, reject) => {
-        audio.onended = resolve;
-        audio.onerror = () => reject(new Error("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0430\u0443\u0434\u0438\u043E"));
-      });
+      await state.audio.play(payload.audioUrl, { rate });
     } else {
-      await speakWithBrowser(payload.text, rate);
+      if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+      await speakWithBrowser(payload.text, rate, state.germanVoice);
     }
     els.listenState.textContent = payload.source === "teacher_mic" ? "\u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0443 \u0438\u043B\u0438 \u043E\u0442\u0432\u0435\u0442\u044C\u0442\u0435" : "\u0422\u0435\u043F\u0435\u0440\u044C \u043E\u0442\u0432\u0435\u0442\u044C\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438";
   } catch (error) {
-    els.listenState.textContent = "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C\xBB, \u0447\u0442\u043E\u0431\u044B \u0432\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A";
-    els.audioUnlock.hidden = false;
-    toast(error.message, "error");
+    reportPlaybackFailure(payload, error);
   } finally {
     state.playing = false;
-    state.currentAudio = null;
     els.listenCard.classList.remove("speaking");
     setTimeout(() => state.capture?.resume(), 220);
   }
 }
-function speakWithBrowser(text, rate) {
-  return new Promise((resolve, reject) => {
-    if (!("speechSynthesis" in window)) return reject(new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F"));
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "de-DE";
-    utterance.rate = Math.max(0.6, Math.min(1.1, rate));
-    const germanVoice = speechSynthesis.getVoices().find((voice) => voice.lang?.toLowerCase().startsWith("de"));
-    if (germanVoice) utterance.voice = germanVoice;
-    utterance.onend = resolve;
-    utterance.onerror = () => reject(new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D"));
-    speechSynthesis.speak(utterance);
-  });
-}
-function stopCurrentAudio() {
-  if (state.currentAudio) {
-    state.currentAudio.pause();
-    state.currentAudio.currentTime = 0;
+function reportPlaybackFailure(payload, error) {
+  if (isAutoplayBlocked(error)) {
+    state.pendingSpeech = payload;
+    showUnlockBanner();
+    els.listenState.textContent = "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB, \u0447\u0442\u043E\u0431\u044B \u0443\u0441\u043B\u044B\u0448\u0430\u0442\u044C \u043F\u0440\u0435\u043F\u043E\u0434\u0430\u0432\u0430\u0442\u0435\u043B\u044F";
+    els.audioUnlock.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  } else {
+    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435 \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0451\u043B\u0441\u044F \u2014 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C\xBB";
   }
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  toast(describeAudioError(error), "error", 6e3);
 }
 function replay(rate, action) {
   if (!state.currentSpeech) return;
   state.socket?.emit("student:assist", { action });
-  playSpeech(state.currentSpeech, rate);
+  void playSpeech(state.currentSpeech, rate);
 }
 function resetReveal() {
   els.revealBox.hidden = true;
