@@ -65,8 +65,18 @@ AITUNNEL_REASONING_EFFORT=none
 
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
+ELEVENLABS_VOICE_LABEL=Голос 1
+ELEVENLABS_VOICE_ID_2=...
+ELEVENLABS_VOICE_LABEL_2=Голос 2
 ELEVENLABS_TTS_MODEL=eleven_flash_v2_5
 ```
+
+В кабинете преподавателя две кнопки озвучивания — по одной на голос.
+`ELEVENLABS_VOICE_ID` даёт первую кнопку, `ELEVENLABS_VOICE_ID_2` — вторую;
+подписи берутся из `ELEVENLABS_VOICE_LABEL` и `ELEVENLABS_VOICE_LABEL_2`
+(по умолчанию «Голос 1» и «Голос 2»). Если второй ID не задан, вторая кнопка
+остаётся неактивной и подсказывает, какую переменную добавить. «🐢 Медленнее»
+повторяет фразу тем голосом, который был выбран последним.
 
 `ELEVENLABS_API_KEY` остаётся только на сервере. Клиент ученика получает короткоживущий одноразовый Scribe token.
 

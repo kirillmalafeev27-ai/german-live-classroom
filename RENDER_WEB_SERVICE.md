@@ -66,8 +66,14 @@ AITUNNEL_REASONING_EFFORT=none
 AITUNNEL_STT_MODEL=whisper-1
 ELEVENLABS_API_KEY=<ключ ElevenLabs>
 ELEVENLABS_VOICE_ID=<ID немецкого голоса>
+ELEVENLABS_VOICE_LABEL=<подпись первой кнопки, например «Анна»>
+ELEVENLABS_VOICE_ID_2=<ID второго голоса>
+ELEVENLABS_VOICE_LABEL_2=<подпись второй кнопки, например «Маркус»>
 ELEVENLABS_TTS_MODEL=eleven_flash_v2_5
 ```
+
+`ELEVENLABS_VOICE_ID_2` не обязателен: без него в кабинете работает одна кнопка
+озвучивания, вторая остаётся неактивной с подсказкой.
 
 `gpt-5.5-mini` сейчас не опубликован как отдельный ID в документации AITUNNEL. Для быстрого режима используйте `gpt-5.4-mini`; для максимального качества — `gpt-5.5`.
 

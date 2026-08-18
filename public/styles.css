@@ -216,7 +216,9 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 .variant-card b { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .variant-card:hover { border-color: #a9c998; background: #fbfdf9; }
 .variant-card.selected { border-color: var(--green); background: #eaf6e4; box-shadow: 0 0 0 2px rgba(99,168,59,.12); }
-.speech-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; margin-top: 13px; }
+.speech-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 13px; }
+.speech-actions .speak-button { flex: 1 1 200px; }
+.speech-actions .slow-button { flex: 0 0 auto; }
 .speak-button { background: linear-gradient(135deg, #4f9e2f, #23826e); color: white; border: 0; border-radius: 15px; min-height: 62px; font-size: 18px; font-weight: 900; box-shadow: 0 9px 20px rgba(49,126,69,.24); }
 .speak-button.voice-ready::after { content: ' ●'; color: #d9ffca; }
 .slow-button { min-width: 110px; border: 1px solid #c9dcc0; background: #eff7eb; color: #3d7528; border-radius: 15px; font-weight: 800; }
@@ -253,6 +255,8 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 .student-title h1 { font-size: 18px; margin: 0; }
 .student-title p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .student-head-status { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+.speak-button.alt { background: linear-gradient(135deg, #2764ad, #0c948a); box-shadow: 0 7px 16px rgba(39,100,173,.24); }
+.voice-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .audio-unlock { width: 100%; min-height: 54px; border: 1px solid #e0b251; border-radius: 14px; background: #fff3d9; color: #7c5406; font-weight: 850; }
 .audio-unlock.needed { border-color: #d98324; background: #ffe9c9; animation: unlock-pulse 1.4s infinite; }
 @keyframes unlock-pulse { 50% { box-shadow: 0 0 0 6px rgba(217,131,36,.16); } }

@@ -46,7 +46,18 @@ const ai = new AiService({
 
 const tts = new TtsService({
   apiKey: process.env.ELEVENLABS_API_KEY,
-  voiceId: process.env.ELEVENLABS_VOICE_ID,
+  voices: [
+    {
+      key: 'primary',
+      id: process.env.ELEVENLABS_VOICE_ID,
+      label: process.env.ELEVENLABS_VOICE_LABEL || 'Голос 1'
+    },
+    {
+      key: 'secondary',
+      id: process.env.ELEVENLABS_VOICE_ID_2,
+      label: process.env.ELEVENLABS_VOICE_LABEL_2 || 'Голос 2'
+    }
+  ],
   model: process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5',
   outputFormat: process.env.ELEVENLABS_TTS_OUTPUT || 'mp3_44100_128',
   prefetchCount: process.env.TTS_PREFETCH_COUNT || 2
@@ -106,6 +117,7 @@ app.get('/health', (_req, res) => {
     stt: stt.enabled,
     sttModel: stt.model,
     elevenlabsTts: tts.enabled,
+    ttsVoices: tts.publicVoices().map((voice) => voice.key),
     model: ai.model,
     now: new Date().toISOString()
   });
@@ -120,6 +132,7 @@ app.get('/api/config', (_req, res) => {
     sttProvider: 'aitunnel-whisper',
     elevenlabsTtsEnabled: tts.enabled,
     ttsModel: tts.model,
+    ttsVoices: tts.publicVoices(),
     demoMode: !ai.enabled || !tts.enabled,
     version: '1.1.0'
   });
@@ -375,7 +388,7 @@ app.get('/api/audio/:playToken', async (req, res, next) => {
   try {
     const play = tts.getPlayToken(req.params.playToken);
     if (!play) return res.status(404).json({ error: 'Audio token expired' });
-    const buffer = await tts.getBuffer(play.text);
+    const buffer = await tts.getBuffer(play.text, play.voiceId);
     res.set({
       'Content-Type': 'audio/mpeg',
       'Content-Length': String(buffer.length),
@@ -587,9 +600,10 @@ io.on('connection', (socket) => {
       full: text
     };
 
+    const voice = tts.resolveVoice(payload?.voice);
     let speechPayload;
-    if (tts.enabled) {
-      const playToken = tts.createPlayToken({ roomCode, text, transcriptMeta, playbackRate });
+    if (tts.enabled && voice) {
+      const playToken = tts.createPlayToken({ roomCode, text, transcriptMeta, playbackRate, voiceId: voice.id });
       speechPayload = {
         mode: 'elevenlabs',
         audioUrl: `/api/audio/${playToken}`,
@@ -597,9 +611,11 @@ io.on('connection', (socket) => {
         playbackRate,
         transcriptMeta,
         turnId: state?.turnId || null,
-        source
+        source,
+        voice: voice.key,
+        voiceLabel: voice.label
       };
-      void tts.prefetch([text]);
+      void tts.prefetch([text], voice.id);
     } else {
       speechPayload = {
         mode: 'browser',
@@ -608,7 +624,9 @@ io.on('connection', (socket) => {
         playbackRate,
         transcriptMeta,
         turnId: state?.turnId || null,
-        source
+        source,
+        voice: null,
+        voiceLabel: 'Голос браузера'
       };
     }
 
@@ -628,9 +646,10 @@ io.on('connection', (socket) => {
       text,
       variant: payload?.variant || state?.selectedVariant || 'main',
       source,
+      voice: speechPayload.voice,
       scaffoldLevel: store.getSession(roomCode)?.scaffoldLevel || 0
     });
-    ack({ ok: true, mode: speechPayload.mode });
+    ack({ ok: true, mode: speechPayload.mode, voice: speechPayload.voice, voiceLabel: speechPayload.voiceLabel });
   });
 
   socket.on('student:assist', async (payload) => {
@@ -802,4 +821,8 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`German Live Classroom listening on http://0.0.0.0:${port}`);
   console.log(`AITUNNEL model: ${ai.model} (${ai.enabled ? 'enabled' : 'demo fallback'})`);
   console.log(`ElevenLabs TTS: ${tts.enabled ? 'enabled' : 'browser fallback'}`);
+  if (tts.enabled) {
+    console.log(`ElevenLabs voices: ${tts.publicVoices().map((voice) => `${voice.key} (${voice.label})`).join(', ')}`);
+    if (tts.voices.length < 2) console.log('Set ELEVENLABS_VOICE_ID_2 to enable the second voice button.');
+  }
 });

@@ -426,6 +426,8 @@ var state = {
   wordStates: /* @__PURE__ */ new Map(),
   room: null,
   roomSecrets: null,
+  voices: [],
+  activeVoice: "primary",
   socket: null,
   candidate: null,
   selectedVariant: "main",
@@ -521,7 +523,9 @@ function cacheElements() {
     candidateMeta: $("#candidateMeta"),
     variantsGrid: $("#variantsGrid"),
     speakButton: $("#speakButton"),
+    speakButton2: $("#speakButton2"),
     slowerSpeakButton: $("#slowerSpeakButton"),
+    voiceHint: $("#voiceHint"),
     scaffoldRow: $("#scaffoldRow"),
     assessmentRow: $("#assessmentRow"),
     sessionLog: $("#sessionLog"),
@@ -564,8 +568,9 @@ function bindStaticEvents() {
   els.requiredWordsInput.addEventListener("input", renderRequiredWordsHint);
   els.generateSentenceButton.addEventListener("click", () => generate("WORD_SENTENCE"));
   els.generateButton.addEventListener("click", () => generate("AUTO"));
-  els.speakButton.addEventListener("click", () => speak(1));
-  els.slowerSpeakButton.addEventListener("click", () => speak(0.76));
+  els.speakButton.addEventListener("click", () => speak(1, "primary"));
+  els.speakButton2.addEventListener("click", () => speak(1, "secondary"));
+  els.slowerSpeakButton.addEventListener("click", () => speak(0.76, state.activeVoice));
   els.candidateEditor.addEventListener("input", () => {
     state.selectedText = els.candidateEditor.value.trim();
     state.selectedVariant = "manual";
@@ -690,6 +695,7 @@ function renderServiceStatus() {
     ["Whisper", state.config.sttEnabled ? state.config.sttModel || "\u0433\u043E\u0442\u043E\u0432" : "\u0440\u0443\u0447\u043D\u043E\u0439 \u0432\u0432\u043E\u0434"],
     ["\u0413\u043E\u043B\u043E\u0441", state.config.elevenlabsTtsEnabled ? state.config.ttsModel : "\u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430"]
   ];
+  renderVoiceButtons();
   els.serviceStatus.innerHTML = entries.map(([label, value]) => makePill(label, value, value === "\u0434\u0435\u043C\u043E" || value === "\u0440\u0443\u0447\u043D\u043E\u0439 \u0432\u0432\u043E\u0434" ? "warn" : "ok")).join("");
   els.modelStatus.textContent = state.config.aitunnelEnabled ? state.config.model : "AITUNNEL \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D \u2014 \u0434\u0435\u043C\u043E-\u0440\u0435\u0436\u0438\u043C";
   if (!state.config.sttEnabled) {
@@ -697,6 +703,35 @@ function renderServiceStatus() {
     els.teacherMicStatus.textContent = "\u0420\u0430\u0441\u043F\u043E\u0437\u043D\u0430\u0432\u0430\u043D\u0438\u0435 \u0440\u0435\u0447\u0438 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E";
     els.teacherMicStatus.className = "status-badge warn";
   }
+}
+function renderVoiceButtons() {
+  state.voices = state.config?.ttsVoices || [];
+  const buttons = [
+    { el: els.speakButton, key: "primary", fallback: "\u0413\u043E\u043B\u043E\u0441 1", envVar: "ELEVENLABS_VOICE_ID" },
+    { el: els.speakButton2, key: "secondary", fallback: "\u0413\u043E\u043B\u043E\u0441 2", envVar: "ELEVENLABS_VOICE_ID_2" }
+  ];
+  const missing = [];
+  const ttsOn = Boolean(state.config?.elevenlabsTtsEnabled);
+  buttons.forEach(({ el, key, fallback, envVar }) => {
+    if (!el) return;
+    const voice = state.voices.find((item) => item.key === key);
+    el.textContent = ttsOn ? `\u25B6 ${voice?.label || fallback}` : "\u25B6 \u0421\u043A\u0430\u0437\u0430\u0442\u044C \u0443\u0447\u0435\u043D\u0438\u043A\u0443";
+    el.dataset.available = voice ? "yes" : "no";
+    el.title = !ttsOn ? "\u041E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0443\u0447\u0435\u043D\u0438\u043A\u0443 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430" : voice ? `\u041E\u0437\u0432\u0443\u0447\u0438\u0442\u044C \u0433\u043E\u043B\u043E\u0441\u043E\u043C \xAB${voice.label}\xBB` : `\u0413\u043E\u043B\u043E\u0441 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D: \u0437\u0430\u0434\u0430\u0439\u0442\u0435 ${envVar}`;
+    if (!voice) missing.push(envVar);
+  });
+  els.speakButton2.hidden = !ttsOn;
+  if (!ttsOn) {
+    els.voiceHint.textContent = "ElevenLabs \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D \u2014 \u0444\u0440\u0430\u0437\u0430 \u0443\u0439\u0434\u0451\u0442 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.";
+  } else if (missing.length) {
+    els.voiceHint.textContent = `\u0412\u0442\u043E\u0440\u043E\u0439 \u0433\u043E\u043B\u043E\u0441 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D. \u0417\u0430\u0434\u0430\u0439\u0442\u0435 ${missing.join(" \u0438 ")} \u0432 \u043F\u0435\u0440\u0435\u043C\u0435\u043D\u043D\u044B\u0445 \u043E\u043A\u0440\u0443\u0436\u0435\u043D\u0438\u044F.`;
+  } else {
+    els.voiceHint.textContent = "";
+  }
+  if (!state.voices.some((item) => item.key === state.activeVoice)) {
+    state.activeVoice = state.voices[0]?.key || "primary";
+  }
+  updateSpeakState();
 }
 function renderProfileList() {
   if (!state.profiles.length) {
@@ -1047,9 +1082,11 @@ function connectTeacherSocket(roomCode) {
   });
   state.socket.on("voice:ready", () => {
     els.speakButton.classList.add("voice-ready");
-    els.speakButton.title = "\u0410\u0443\u0434\u0438\u043E \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043B\u0435\u043D\u043E";
   });
-  state.socket.on("speech:sent", ({ text, source }) => addLog(`${source === "teacher_mic" ? "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043F\u0440\u0435\u043F\u043E\u0434\u0430\u0432\u0430\u0442\u0435\u043B\u044F" : "\u0410\u0433\u0435\u043D\u0442"}: ${text}`, "teacher"));
+  state.socket.on("speech:sent", ({ text, source, voiceLabel }) => addLog(
+    `${source === "teacher_mic" ? "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043F\u0440\u0435\u043F\u043E\u0434\u0430\u0432\u0430\u0442\u0435\u043B\u044F" : "\u0410\u0433\u0435\u043D\u0442"}${voiceLabel ? ` (${voiceLabel})` : ""}: ${text}`,
+    "teacher"
+  ));
   state.socket.on("student:assist", ({ action }) => {
     const names = { repeat: "\u043F\u043E\u0432\u0442\u043E\u0440\u0438\u043B \u0430\u0443\u0434\u0438\u043E", slower: "\u0432\u043A\u043B\u044E\u0447\u0438\u043B \u043C\u0435\u0434\u043B\u0435\u043D\u043D\u0435\u0435", keyword: "\u043E\u0442\u043A\u0440\u044B\u043B \u043A\u043B\u044E\u0447\u0435\u0432\u043E\u0435 \u0441\u043B\u043E\u0432\u043E", starter: "\u043E\u0442\u043A\u0440\u044B\u043B \u043D\u0430\u0447\u0430\u043B\u043E", transcript: "\u043E\u0442\u043A\u0440\u044B\u043B \u0432\u0435\u0441\u044C \u0442\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0442" };
     addLog(`\u0423\u0447\u0435\u043D\u0438\u043A ${names[action] || action}`, "assist");
@@ -1165,9 +1202,13 @@ async function sendTeacherVoiceCommand() {
       text,
       variant: "teacher_mic",
       source: "teacher_mic",
-      playbackRate: 1
+      playbackRate: 1,
+      voice: state.activeVoice
     });
-    toast(result.mode === "elevenlabs" ? "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043F\u0440\u043E\u0437\u0432\u0443\u0447\u0430\u043B\u0430 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u043D\u043E\u0441\u0438\u0442\u0435\u043B\u044F" : "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0430 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430", "success");
+    toast(
+      result.mode === "elevenlabs" ? `\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043F\u0440\u043E\u0437\u0432\u0443\u0447\u0430\u043B\u0430 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \xAB${result.voiceLabel || state.activeVoice}\xBB` : "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0430 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430",
+      "success"
+    );
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -1299,21 +1340,29 @@ function highlightVariantFromText(text) {
 }
 function updateSpeakState() {
   const ready = Boolean(state.selectedText || els.candidateEditor.value.trim());
-  els.speakButton.disabled = !ready || !state.socket?.connected || state.sessionEnded;
-  els.slowerSpeakButton.disabled = !ready || !state.socket?.connected || state.sessionEnded;
+  const blocked = !ready || !state.socket?.connected || state.sessionEnded;
+  const voiceMissing = (button) => state.config?.elevenlabsTtsEnabled && button.dataset.available === "no";
+  els.speakButton.disabled = blocked || voiceMissing(els.speakButton);
+  els.speakButton2.disabled = blocked || voiceMissing(els.speakButton2);
+  els.slowerSpeakButton.disabled = blocked;
 }
-async function speak(playbackRate) {
+async function speak(playbackRate, voice = state.activeVoice) {
   const text = els.candidateEditor.value.trim();
   if (!text) return;
-  setBusy(playbackRate === 1 ? els.speakButton : els.slowerSpeakButton, true, "\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u043C\u2026");
+  const button = playbackRate !== 1 ? els.slowerSpeakButton : voice === "secondary" ? els.speakButton2 : els.speakButton;
+  setBusy(button, true, "\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u043C\u2026");
   try {
     await socketAck(state.socket, "teacher:candidate", { text, variant: state.selectedVariant || "manual" });
-    const result = await socketAck(state.socket, "teacher:speak", { text, variant: state.selectedVariant, playbackRate });
-    toast(result.mode === "elevenlabs" ? "\u0413\u043E\u043B\u043E\u0441 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D \u0443\u0447\u0435\u043D\u0438\u043A\u0443" : "\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0447\u0435\u0440\u0435\u0437 \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430", "success");
+    const result = await socketAck(state.socket, "teacher:speak", { text, variant: state.selectedVariant, playbackRate, voice });
+    state.activeVoice = result.voice || voice;
+    toast(
+      result.mode === "elevenlabs" ? `\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0443\u0447\u0435\u043D\u0438\u043A\u0443 \u0433\u043E\u043B\u043E\u0441\u043E\u043C \xAB${result.voiceLabel || voice}\xBB` : "\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043E \u0447\u0435\u0440\u0435\u0437 \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430",
+      "success"
+    );
   } catch (error) {
     toast(error.message, "error");
   } finally {
-    setBusy(playbackRate === 1 ? els.speakButton : els.slowerSpeakButton, false);
+    setBusy(button, false);
     updateSpeakState();
   }
 }

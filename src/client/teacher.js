@@ -29,6 +29,8 @@ const state = {
   wordStates: new Map(),
   room: null,
   roomSecrets: null,
+  voices: [],
+  activeVoice: 'primary',
   socket: null,
   candidate: null,
   selectedVariant: 'main',
@@ -129,7 +131,9 @@ function cacheElements() {
     candidateMeta: $('#candidateMeta'),
     variantsGrid: $('#variantsGrid'),
     speakButton: $('#speakButton'),
+    speakButton2: $('#speakButton2'),
     slowerSpeakButton: $('#slowerSpeakButton'),
+    voiceHint: $('#voiceHint'),
     scaffoldRow: $('#scaffoldRow'),
     assessmentRow: $('#assessmentRow'),
     sessionLog: $('#sessionLog'),
@@ -173,8 +177,10 @@ function bindStaticEvents() {
   els.requiredWordsInput.addEventListener('input', renderRequiredWordsHint);
   els.generateSentenceButton.addEventListener('click', () => generate('WORD_SENTENCE'));
   els.generateButton.addEventListener('click', () => generate('AUTO'));
-  els.speakButton.addEventListener('click', () => speak(1));
-  els.slowerSpeakButton.addEventListener('click', () => speak(0.76));
+  els.speakButton.addEventListener('click', () => speak(1, 'primary'));
+  els.speakButton2.addEventListener('click', () => speak(1, 'secondary'));
+  // Slower repeats the phrase with whichever voice was used last.
+  els.slowerSpeakButton.addEventListener('click', () => speak(0.76, state.activeVoice));
   els.candidateEditor.addEventListener('input', () => {
     state.selectedText = els.candidateEditor.value.trim();
     state.selectedVariant = 'manual';
@@ -306,6 +312,7 @@ function renderServiceStatus() {
     ['Whisper', state.config.sttEnabled ? (state.config.sttModel || 'готов') : 'ручной ввод'],
     ['Голос', state.config.elevenlabsTtsEnabled ? state.config.ttsModel : 'голос браузера']
   ];
+  renderVoiceButtons();
   els.serviceStatus.innerHTML = entries.map(([label, value]) => makePill(label, value, value === 'демо' || value === 'ручной ввод' ? 'warn' : 'ok')).join('');
   els.modelStatus.textContent = state.config.aitunnelEnabled ? state.config.model : 'AITUNNEL не настроен — демо-режим';
   if (!state.config.sttEnabled) {
@@ -313,6 +320,46 @@ function renderServiceStatus() {
     els.teacherMicStatus.textContent = 'Распознавание речи не настроено';
     els.teacherMicStatus.className = 'status-badge warn';
   }
+}
+
+// Two speak buttons, one per configured ElevenLabs voice. A voice that has no
+// id on the server stays disabled and says which variable is missing.
+function renderVoiceButtons() {
+  state.voices = state.config?.ttsVoices || [];
+  const buttons = [
+    { el: els.speakButton, key: 'primary', fallback: 'Голос 1', envVar: 'ELEVENLABS_VOICE_ID' },
+    { el: els.speakButton2, key: 'secondary', fallback: 'Голос 2', envVar: 'ELEVENLABS_VOICE_ID_2' }
+  ];
+  const missing = [];
+  // Without ElevenLabs there is only the browser voice, so a second button
+  // would send exactly the same thing — show one.
+  const ttsOn = Boolean(state.config?.elevenlabsTtsEnabled);
+
+  buttons.forEach(({ el, key, fallback, envVar }) => {
+    if (!el) return;
+    const voice = state.voices.find((item) => item.key === key);
+    el.textContent = ttsOn ? `▶ ${voice?.label || fallback}` : '▶ Сказать ученику';
+    el.dataset.available = voice ? 'yes' : 'no';
+    el.title = !ttsOn
+      ? 'Отправить ученику голосом браузера'
+      : (voice ? `Озвучить голосом «${voice.label}»` : `Голос не настроен: задайте ${envVar}`);
+    if (!voice) missing.push(envVar);
+  });
+
+  els.speakButton2.hidden = !ttsOn;
+
+  if (!ttsOn) {
+    els.voiceHint.textContent = 'ElevenLabs не настроен — фраза уйдёт голосом браузера.';
+  } else if (missing.length) {
+    els.voiceHint.textContent = `Второй голос недоступен. Задайте ${missing.join(' и ')} в переменных окружения.`;
+  } else {
+    els.voiceHint.textContent = '';
+  }
+
+  if (!state.voices.some((item) => item.key === state.activeVoice)) {
+    state.activeVoice = state.voices[0]?.key || 'primary';
+  }
+  updateSpeakState();
 }
 
 function renderProfileList() {
@@ -684,10 +731,13 @@ function connectTeacherSocket(roomCode) {
     els.generateSentenceButton.disabled = false;
   });
   state.socket.on('voice:ready', () => {
+    // Only the default voice is prefetched, so only that button gets the dot.
     els.speakButton.classList.add('voice-ready');
-    els.speakButton.title = 'Аудио подготовлено';
   });
-  state.socket.on('speech:sent', ({ text, source }) => addLog(`${source === 'teacher_mic' ? 'Команда преподавателя' : 'Агент'}: ${text}`, 'teacher'));
+  state.socket.on('speech:sent', ({ text, source, voiceLabel }) => addLog(
+    `${source === 'teacher_mic' ? 'Команда преподавателя' : 'Агент'}${voiceLabel ? ` (${voiceLabel})` : ''}: ${text}`,
+    'teacher'
+  ));
   state.socket.on('student:assist', ({ action }) => {
     const names = { repeat: 'повторил аудио', slower: 'включил медленнее', keyword: 'открыл ключевое слово', starter: 'открыл начало', transcript: 'открыл весь транскрипт' };
     addLog(`Ученик ${names[action] || action}`, 'assist');
@@ -812,9 +862,15 @@ async function sendTeacherVoiceCommand() {
       text,
       variant: 'teacher_mic',
       source: 'teacher_mic',
-      playbackRate: 1
+      playbackRate: 1,
+      voice: state.activeVoice
     });
-    toast(result.mode === 'elevenlabs' ? 'Команда прозвучала голосом носителя' : 'Команда отправлена голосом браузера', 'success');
+    toast(
+      result.mode === 'elevenlabs'
+        ? `Команда прозвучала голосом «${result.voiceLabel || state.activeVoice}»`
+        : 'Команда отправлена голосом браузера',
+      'success'
+    );
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -957,22 +1013,36 @@ function highlightVariantFromText(text) {
 
 function updateSpeakState() {
   const ready = Boolean(state.selectedText || els.candidateEditor.value.trim());
-  els.speakButton.disabled = !ready || !state.socket?.connected || state.sessionEnded;
-  els.slowerSpeakButton.disabled = !ready || !state.socket?.connected || state.sessionEnded;
+  const blocked = !ready || !state.socket?.connected || state.sessionEnded;
+  // Without ElevenLabs every phrase goes out through the browser voice, so the
+  // first button still works — it just does not pick an ElevenLabs voice.
+  const voiceMissing = (button) => state.config?.elevenlabsTtsEnabled && button.dataset.available === 'no';
+  els.speakButton.disabled = blocked || voiceMissing(els.speakButton);
+  els.speakButton2.disabled = blocked || voiceMissing(els.speakButton2);
+  els.slowerSpeakButton.disabled = blocked;
 }
 
-async function speak(playbackRate) {
+async function speak(playbackRate, voice = state.activeVoice) {
   const text = els.candidateEditor.value.trim();
   if (!text) return;
-  setBusy(playbackRate === 1 ? els.speakButton : els.slowerSpeakButton, true, 'Отправляем…');
+  const button = playbackRate !== 1
+    ? els.slowerSpeakButton
+    : (voice === 'secondary' ? els.speakButton2 : els.speakButton);
+  setBusy(button, true, 'Отправляем…');
   try {
     await socketAck(state.socket, 'teacher:candidate', { text, variant: state.selectedVariant || 'manual' });
-    const result = await socketAck(state.socket, 'teacher:speak', { text, variant: state.selectedVariant, playbackRate });
-    toast(result.mode === 'elevenlabs' ? 'Голос отправлен ученику' : 'Отправлено через голос браузера', 'success');
+    const result = await socketAck(state.socket, 'teacher:speak', { text, variant: state.selectedVariant, playbackRate, voice });
+    state.activeVoice = result.voice || voice;
+    toast(
+      result.mode === 'elevenlabs'
+        ? `Отправлено ученику голосом «${result.voiceLabel || voice}»`
+        : 'Отправлено через голос браузера',
+      'success'
+    );
   } catch (error) {
     toast(error.message, 'error');
   } finally {
-    setBusy(playbackRate === 1 ? els.speakButton : els.slowerSpeakButton, false);
+    setBusy(button, false);
     updateSpeakState();
   }
 }

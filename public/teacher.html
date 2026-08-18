@@ -186,9 +186,11 @@
             <div id="candidateMeta" class="candidate-meta"></div>
             <div id="variantsGrid" class="variants-grid"></div>
             <div class="speech-actions">
-              <button id="speakButton" class="speak-button" type="button" disabled>▶ Сказать ученику</button>
+              <button id="speakButton" class="speak-button" type="button" data-voice="primary" disabled>▶ Голос 1</button>
+              <button id="speakButton2" class="speak-button alt" type="button" data-voice="secondary" disabled>▶ Голос 2</button>
               <button id="slowerSpeakButton" class="slow-button" type="button" disabled>🐢 Медленнее</button>
             </div>
+            <p id="voiceHint" class="voice-hint"></p>
           </section>
 
           <section class="scaffold-card card">
