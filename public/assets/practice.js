@@ -327,7 +327,8 @@ function isAutoplayBlocked(error) {
 }
 function describeAudioError(error) {
   if (isAutoplayBlocked(error)) return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0437\u0432\u0443\u043A. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u2014 \u0434\u0430\u043B\u044C\u0448\u0435 \u0432\u0441\u0451 \u0438\u0433\u0440\u0430\u0435\u0442 \u0441\u0430\u043C\u043E.";
-  if (error?.name === "NotSupportedError") return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043D\u0435 \u0441\u043C\u043E\u0433 \u043F\u0440\u043E\u0438\u0433\u0440\u0430\u0442\u044C \u044D\u0442\u043E \u0430\u0443\u0434\u0438\u043E. \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438\u043B\u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 Chrome/Safari \u043F\u043E\u0441\u0432\u0435\u0436\u0435\u0435.";
+  if (error?.name === "AudioSourceError") return error.message;
+  if (error?.name === "NotSupportedError") return "\u0424\u0430\u0439\u043B \u043E\u0437\u0432\u0443\u0447\u043A\u0438 \u043D\u0435 \u043E\u0442\u043A\u0440\u044B\u043B\u0441\u044F. \u0412\u043A\u043B\u044E\u0447\u0430\u044E \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.";
   return `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0430\u0443\u0434\u0438\u043E: ${error?.message || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430"}`;
 }
 function createAudioGate({ onChange = () => {
@@ -337,6 +338,12 @@ function createAudioGate({ onChange = () => {
   let unlocked = false;
   let pending = null;
   let unlocking = null;
+  let objectUrl = "";
+  const releaseObjectUrl = () => {
+    if (!objectUrl) return;
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = "";
+  };
   const ensureElement = () => {
     if (element) return element;
     element = new Audio();
@@ -423,16 +430,25 @@ function createAudioGate({ onChange = () => {
       });
       return unlocking;
     },
-    // Resolves when the clip finishes; rejects with the browser error when the
-    // browser refuses to start it, so callers can offer the unlock button.
-    async play(url, { rate = 1 } = {}) {
+    // Accepts a URL or a Blob (a Blob avoids pointing <audio> at an endpoint
+    // that might answer with a JSON error, which browsers report only as an
+    // unsupported source). Resolves when the clip finishes; rejects with the
+    // browser error when the browser refuses to start it, so callers can offer
+    // the unlock button.
+    async play(source, { rate = 1 } = {}) {
       const el = ensureElement();
       clearPending("resolve");
       try {
         el.pause();
       } catch {
       }
-      el.src = url;
+      releaseObjectUrl();
+      if (source instanceof Blob) {
+        objectUrl = URL.createObjectURL(source);
+        el.src = objectUrl;
+      } else {
+        el.src = source;
+      }
       try {
         el.load();
       } catch {
@@ -465,6 +481,7 @@ function createAudioGate({ onChange = () => {
         } catch {
         }
       }
+      releaseObjectUrl();
       if ("speechSynthesis" in window) {
         try {
           speechSynthesis.cancel();
@@ -489,6 +506,59 @@ function unlockOnFirstGesture(gate, done = () => {
   events.forEach((name) => document.addEventListener(name, handler, true));
   return detach;
 }
+async function loadGermanVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  let voices = speechSynthesis.getVoices();
+  if (!voices.length) {
+    voices = await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve(speechSynthesis.getVoices());
+      };
+      speechSynthesis.addEventListener?.("voiceschanged", finish, { once: true });
+      setTimeout(finish, 1500);
+    });
+  }
+  const german = voices.filter((voice) => voice.lang?.toLowerCase().startsWith("de"));
+  return german.find((voice) => voice.localService) || german[0] || null;
+}
+function speakWithBrowser(text, rate = 1, voice = null) {
+  return new Promise((resolve, reject) => {
+    if (!("speechSynthesis" in window)) return reject(new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044F"));
+    let settled = false;
+    let keepAlive = 0;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(keepAlive);
+      clearTimeout(watchdog);
+      if (error) reject(error);
+      else resolve();
+    };
+    try {
+      speechSynthesis.cancel();
+    } catch {
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "de-DE";
+    utterance.rate = Math.max(0.6, Math.min(1.1, rate));
+    if (voice) utterance.voice = voice;
+    utterance.onend = () => finish();
+    utterance.onerror = (event) => finish(
+      event?.error === "not-allowed" ? Object.assign(new Error("\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0433\u043E\u043B\u043E\u0441"), { name: "NotAllowedError" }) : new Error("\u0413\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D")
+    );
+    keepAlive = setInterval(() => {
+      try {
+        speechSynthesis.resume();
+      } catch {
+      }
+    }, 9e3);
+    const watchdog = setTimeout(() => finish(), Math.max(8e3, text.length * 140));
+    speechSynthesis.speak(utterance);
+  });
+}
 
 // src/client/practice.js
 var PROGRESS_STORAGE_KEY = "glc.practiceProgress.v1";
@@ -510,6 +580,7 @@ var state = {
   micOn: false,
   lastAiText: "",
   audio: null,
+  germanVoice: null,
   speaking: false,
   pendingSpeech: null,
   pendingInputMethod: "typed",
@@ -553,7 +624,7 @@ async function boot() {
       els.startMicButton.disabled = true;
       els.startMicButton.textContent = "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D";
     }
-    if (!state.config.ttsEnabled) {
+    if (!canSpeak()) {
       els.repeatButton.disabled = true;
       els.slowerButton.disabled = true;
     }
@@ -932,28 +1003,55 @@ function flushPendingSpeech() {
   if (pending) void speak(pending.text, pending.rate);
 }
 async function speak(text, rate = 1) {
-  if (!state.config.ttsEnabled || !text) return;
+  if (!text || !canSpeak()) return;
   state.audio.stop();
   state.speaking = true;
   state.capture?.pause();
-  let objectUrl = "";
   try {
-    const response = await fetch("/api/practice/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-    if (!response.ok) throw new Error(`\u0441\u0435\u0440\u0432\u0435\u0440 \u043E\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u043D\u0438\u044F \u043E\u0442\u0432\u0435\u0442\u0438\u043B ${response.status}`);
-    const blob = await response.blob();
-    objectUrl = URL.createObjectURL(blob);
-    await state.audio.play(objectUrl, { rate });
+    await speakText(text, rate);
   } catch (error) {
     reportSpeakFailure(text, rate, error);
   } finally {
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
     state.speaking = false;
     setTimeout(() => state.capture?.resume(), 220);
   }
+}
+async function speakText(text, rate) {
+  if (state.config.ttsEnabled) {
+    try {
+      const clip = await fetchPracticeClip(text);
+      await state.audio.play(clip, { rate });
+      return;
+    } catch (error) {
+      if (isAutoplayBlocked(error)) throw error;
+      console.warn("[audio] practice TTS failed, using the browser voice:", error);
+      toast(`${describeAudioError(error)} \u0412\u043A\u043B\u044E\u0447\u0430\u044E \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.`, "warn", 5e3);
+    }
+  }
+  if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+  await speakWithBrowser(text, rate, state.germanVoice);
+}
+async function fetchPracticeClip(text) {
+  const response = await fetch("/api/practice/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    let message = `\u0421\u0435\u0440\u0432\u0435\u0440 \u043E\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u043D\u0438\u044F \u043E\u0442\u0432\u0435\u0442\u0438\u043B ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {
+    }
+    throw Object.assign(new Error(message), { name: "AudioSourceError", status: response.status });
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw Object.assign(new Error("\u0421\u0435\u0440\u0432\u0435\u0440 \u043F\u0440\u0438\u0441\u043B\u0430\u043B \u043F\u0443\u0441\u0442\u0443\u044E \u043E\u0437\u0432\u0443\u0447\u043A\u0443"), { name: "AudioSourceError" });
+  return blob;
+}
+function canSpeak() {
+  return state.config.ttsEnabled || "speechSynthesis" in window;
 }
 function reportSpeakFailure(text, rate, error) {
   if (isAutoplayBlocked(error)) {
@@ -962,7 +1060,8 @@ function reportSpeakFailure(text, rate, error) {
     els.listenState.textContent = "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB, \u0447\u0442\u043E\u0431\u044B \u0443\u0441\u043B\u044B\u0448\u0430\u0442\u044C \u043E\u0442\u0432\u0435\u0442";
     els.audioUnlock?.scrollIntoView?.({ block: "center", behavior: "smooth" });
   } else {
-    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u2014 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u043A\u043D\u043E\u043F\u043A\u043E\u0439 \xAB\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0442\u0435\u043A\u0441\u0442\xBB";
+    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u2014 \u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u043E\u0442\u0432\u0435\u0442\u0430";
+    if (els.revealBox) els.revealBox.hidden = false;
   }
   toast(describeAudioError(error), "error", 5e3);
 }

@@ -2,7 +2,7 @@ import {
   api, $, esc, toast, setBusy, getQuery, storageKeys, mediaStorageKeys,
   refreshMicrophoneSelect, startVoiceCapture, transcribeAudio,
   createAudioGate, unlockOnFirstGesture, describeAudioError, isAutoplayBlocked,
-  loadGermanVoice, speakWithBrowser
+  loadGermanVoice, speakWithBrowser, loadAudioClip
 } from './shared.js';
 
 const query = getQuery();
@@ -408,12 +408,7 @@ async function playSpeech(payload, rate = 1) {
   els.listenState.textContent = payload.source === 'teacher_mic' ? 'Слушайте команду…' : 'Слушайте…';
 
   try {
-    if (payload.mode === 'elevenlabs' && payload.audioUrl) {
-      await state.audio.play(payload.audioUrl, { rate });
-    } else {
-      if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
-      await speakWithBrowser(payload.text, rate, state.germanVoice);
-    }
+    await speakPayload(payload, rate);
     els.listenState.textContent = payload.source === 'teacher_mic'
       ? 'Выполните команду или ответьте'
       : 'Теперь ответьте по-немецки';
@@ -426,6 +421,32 @@ async function playSpeech(payload, rate = 1) {
   }
 }
 
+// ElevenLabs first, the browser voice as a safety net. An expired audio link or
+// a TTS outage used to leave the learner staring at "Звук не воспроизвёлся" with
+// no way forward — a robot voice beats silence in a live lesson.
+async function speakPayload(payload, rate) {
+  if (payload.mode === 'elevenlabs' && payload.audioUrl) {
+    try {
+      const clip = await loadAudioClip(payload.audioUrl);
+      await state.audio.play(clip, { rate });
+      return;
+    } catch (error) {
+      // A blocked autoplay needs the unlock click, not a different voice.
+      if (isAutoplayBlocked(error)) throw error;
+      console.warn('[audio] ElevenLabs playback failed, using the browser voice:', error);
+      toast(`${describeAudioError(error)} Включаю голос браузера.`, 'warn', 5000);
+    }
+  } else if (payload.ttsError) {
+    toast(`Голос ElevenLabs недоступен: ${payload.ttsError}. Читаю голосом браузера.`, 'warn', 5000);
+  }
+  await speakWithBrowserVoice(payload.text, rate);
+}
+
+async function speakWithBrowserVoice(text, rate) {
+  if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+  await speakWithBrowser(text, rate, state.germanVoice);
+}
+
 function reportPlaybackFailure(payload, error) {
   if (isAutoplayBlocked(error)) {
     // Keep the phrase so the unlock click plays it instead of losing the turn.
@@ -434,7 +455,11 @@ function reportPlaybackFailure(payload, error) {
     els.listenState.textContent = 'Нажмите «Включить звук», чтобы услышать преподавателя';
     els.audioUnlock.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
   } else {
-    els.listenState.textContent = 'Звук не воспроизвёлся — нажмите «Повторить»';
+    els.listenState.textContent = 'Звук недоступен — откройте текст кнопкой «Показать транскрипт»';
+    // Both voices are gone, so the text is the only way to keep the lesson
+    // moving: put it in front of the learner instead of hiding it behind a
+    // button they were told not to press.
+    reveal('transcript', 'transcript_no_audio');
   }
   toast(describeAudioError(error), 'error', 6000);
 }
@@ -442,9 +467,10 @@ function reportPlaybackFailure(payload, error) {
 function replay(rate, action) {
   if (!state.currentSpeech) return;
   state.socket?.emit('student:assist', { action });
-  // Start playback straight from the click: that gesture is what unlocks the
-  // shared <audio> element on iOS, so no separate unlock step is needed here.
-  void playSpeech(state.currentSpeech, rate);
+  // unlock() starts the silent clip synchronously inside this click, which is
+  // what iOS needs; awaiting it keeps the real phrase from interrupting that
+  // load. Once the gate is open the wait is a no-op.
+  void state.audio.unlock().then(() => playSpeech(state.currentSpeech, rate));
 }
 
 function resetReveal() {
@@ -453,7 +479,10 @@ function resetReveal() {
   els.revealText.textContent = '';
 }
 
-function reveal(type) {
+// `action` is what the teacher's log records. A transcript the learner asked for
+// and one the app had to show because both voices failed are different events,
+// so they must not be counted as the same use of scaffolding.
+function reveal(type, action = type) {
   if (!state.currentSpeech) return;
   const meta = state.currentSpeech.transcriptMeta || {};
   const content = type === 'keyword' ? meta.keyword : type === 'starter' ? meta.starter : meta.full || state.currentSpeech.text;
@@ -461,5 +490,5 @@ function reveal(type) {
   els.revealLabel.textContent = labels[type];
   els.revealText.textContent = content || '—';
   els.revealBox.hidden = false;
-  state.socket?.emit('student:assist', { action: type });
+  state.socket?.emit('student:assist', { action });
 }

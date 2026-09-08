@@ -49,6 +49,21 @@ if (!speakAck?.ok) throw new Error(speakAck?.error || 'speak failed');
 const speech = await speechPromise;
 if (speech.text !== ready.candidate.main) throw new Error('speech text mismatch');
 
+// The student page plays this link. Fetch it the way the browser does, so a
+// TTS outage shows up here as a failed test instead of as silence in a lesson.
+let audioCheck = 'browser voice (ElevenLabs off)';
+if (speech.mode === 'elevenlabs') {
+  const audio = await fetch(`${base}${speech.audioUrl}`);
+  if (!audio.ok) throw new Error(`audio ${speech.audioUrl}: ${audio.status} ${(await audio.text()).slice(0, 200)}`);
+  const type = audio.headers.get('content-type') || '';
+  if (!type.startsWith('audio/')) throw new Error(`audio served as ${type}, not audio/*`);
+  const size = (await audio.arrayBuffer()).byteLength;
+  if (!size) throw new Error('audio body is empty');
+  audioCheck = `${size} bytes of ${type}`;
+} else if (speech.ttsError) {
+  throw new Error(`ElevenLabs fell back to the browser voice: ${speech.ttsError}`);
+}
+
 const directText = 'Öffne bitte das Buch.';
 const micAck = await new Promise((resolve) => teacher.emit('teacher:mic-committed', { text: directText }, resolve));
 if (!micAck?.ok) throw new Error(micAck?.error || 'teacher mic commit failed');
@@ -72,6 +87,7 @@ console.log(JSON.stringify({
   room: room.session.code,
   candidate: ready.candidate.main,
   speechMode: speech.mode,
+  audioCheck,
   teacherMicSpeech: directSpeech.text,
   teacherMicSource: directSpeech.source
 }, null, 2));

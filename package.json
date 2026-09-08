@@ -12,7 +12,8 @@
     "start": "node src/server.js",
     "dev": "npm run build && node --watch src/server.js",
     "smoke": "node scripts/smoke-test.mjs",
-    "realtime-test": "node scripts/realtime-test.mjs"
+    "realtime-test": "node scripts/realtime-test.mjs",
+    "audio-test": "node scripts/audio-test.mjs"
   },
   "dependencies": {
     "@elevenlabs/client": "^1.15.0",

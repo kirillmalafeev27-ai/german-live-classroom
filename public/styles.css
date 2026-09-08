@@ -86,6 +86,7 @@ textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.success { background: #3c7d2a; }
 .toast.error { background: #a93b34; }
+.toast.warn { background: #8a5a12; }
 
 /* Landing */
 .landing { min-height: 100vh; display: grid; place-items: center; padding: 28px; }

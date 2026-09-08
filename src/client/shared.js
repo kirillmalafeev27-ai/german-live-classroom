@@ -556,8 +556,34 @@ export function isAutoplayBlocked(error) {
 
 export function describeAudioError(error) {
   if (isAutoplayBlocked(error)) return 'Браузер заблокировал звук. Нажмите «Включить звук» один раз — дальше всё играет само.';
-  if (error?.name === 'NotSupportedError') return 'Браузер не смог проиграть это аудио. Обновите страницу или используйте Chrome/Safari посвежее.';
+  // AudioSourceError carries the server's own explanation (expired link, spent
+  // ElevenLabs quota, …) — far more useful than blaming the browser.
+  if (error?.name === 'AudioSourceError') return error.message;
+  if (error?.name === 'NotSupportedError') return 'Файл озвучки не открылся. Включаю голос браузера.';
   return `Не удалось воспроизвести аудио: ${error?.message || 'неизвестная ошибка'}`;
+}
+
+// Download the clip before handing it to <audio>. Pointing the element straight
+// at the URL makes every server-side failure look identical ("unsupported
+// source"), because the element cannot show us the JSON error body it got.
+export async function loadAudioClip(url, { token = '' } = {}) {
+  let response;
+  try {
+    response = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch (error) {
+    throw Object.assign(new Error('Не удалось скачать озвучку — проверьте соединение'), { name: 'AudioSourceError', cause: error });
+  }
+  if (!response.ok) {
+    let message = `Сервер озвучивания ответил ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw Object.assign(new Error(message), { name: 'AudioSourceError', status: response.status });
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw Object.assign(new Error('Сервер прислал пустую озвучку'), { name: 'AudioSourceError' });
+  return blob;
 }
 
 export function createAudioGate({ onChange = () => {} } = {}) {
@@ -566,6 +592,13 @@ export function createAudioGate({ onChange = () => {} } = {}) {
   let unlocked = false;
   let pending = null;
   let unlocking = null;
+  let objectUrl = '';
+
+  const releaseObjectUrl = () => {
+    if (!objectUrl) return;
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = '';
+  };
 
   const ensureElement = () => {
     if (element) return element;
@@ -650,13 +683,22 @@ export function createAudioGate({ onChange = () => {} } = {}) {
       return unlocking;
     },
 
-    // Resolves when the clip finishes; rejects with the browser error when the
-    // browser refuses to start it, so callers can offer the unlock button.
-    async play(url, { rate = 1 } = {}) {
+    // Accepts a URL or a Blob (a Blob avoids pointing <audio> at an endpoint
+    // that might answer with a JSON error, which browsers report only as an
+    // unsupported source). Resolves when the clip finishes; rejects with the
+    // browser error when the browser refuses to start it, so callers can offer
+    // the unlock button.
+    async play(source, { rate = 1 } = {}) {
       const el = ensureElement();
       clearPending('resolve');
       try { el.pause(); } catch {}
-      el.src = url;
+      releaseObjectUrl();
+      if (source instanceof Blob) {
+        objectUrl = URL.createObjectURL(source);
+        el.src = objectUrl;
+      } else {
+        el.src = source;
+      }
       try { el.load(); } catch {}
       el.playbackRate = rate;
       await el.play();
@@ -682,6 +724,7 @@ export function createAudioGate({ onChange = () => {} } = {}) {
       if (element) {
         try { element.pause(); } catch {}
       }
+      releaseObjectUrl();
       if ('speechSynthesis' in window) {
         try { speechSynthesis.cancel(); } catch {}
       }

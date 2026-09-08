@@ -865,12 +865,7 @@ async function sendTeacherVoiceCommand() {
       playbackRate: 1,
       voice: state.activeVoice
     });
-    toast(
-      result.mode === 'elevenlabs'
-        ? `Команда прозвучала голосом «${result.voiceLabel || state.activeVoice}»`
-        : 'Команда отправлена голосом браузера',
-      'success'
-    );
+    announceSpeechResult(result, `Команда прозвучала голосом «${result.voiceLabel || state.activeVoice}»`, 'Команда отправлена голосом браузера');
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -1033,18 +1028,24 @@ async function speak(playbackRate, voice = state.activeVoice) {
     await socketAck(state.socket, 'teacher:candidate', { text, variant: state.selectedVariant || 'manual' });
     const result = await socketAck(state.socket, 'teacher:speak', { text, variant: state.selectedVariant, playbackRate, voice });
     state.activeVoice = result.voice || voice;
-    toast(
-      result.mode === 'elevenlabs'
-        ? `Отправлено ученику голосом «${result.voiceLabel || voice}»`
-        : 'Отправлено через голос браузера',
-      'success'
-    );
+    announceSpeechResult(result, `Отправлено ученику голосом «${result.voiceLabel || voice}»`, 'Отправлено через голос браузера');
   } catch (error) {
     toast(error.message, 'error');
   } finally {
     setBusy(button, false);
     updateSpeakState();
   }
+}
+
+// A silent downgrade to the browser voice used to look like success here while
+// the student heard a robot (or nothing at all) — say what happened and why.
+function announceSpeechResult(result, okMessage, fallbackMessage) {
+  if (result.mode === 'elevenlabs') return toast(okMessage, 'success');
+  if (result.ttsError) {
+    toast(`${fallbackMessage}: ElevenLabs недоступен — ${result.ttsError}`, 'warn', 7000);
+    return;
+  }
+  toast(fallbackMessage, 'success');
 }
 
 function renderScaffold() {

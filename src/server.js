@@ -20,6 +20,7 @@ import {
   practiceModes, listPracticeScenarios, getScenario, getPracticeLesson, normalizePracticeLevel
 } from './practice.js';
 import { openapi } from './openapi.js';
+import { sendAudioBuffer } from './audio-response.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -60,7 +61,8 @@ const tts = new TtsService({
   ],
   model: process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5',
   outputFormat: process.env.ELEVENLABS_TTS_OUTPUT || 'mp3_44100_128',
-  prefetchCount: process.env.TTS_PREFETCH_COUNT || 2
+  prefetchCount: process.env.TTS_PREFETCH_COUNT || 2,
+  timeoutMs: process.env.ELEVENLABS_TIMEOUT_MS || 15000
 });
 
 const stt = new SttService({
@@ -118,6 +120,7 @@ app.get('/health', (_req, res) => {
     sttModel: stt.model,
     elevenlabsTts: tts.enabled,
     ttsVoices: tts.publicVoices().map((voice) => voice.key),
+    ttsLastError: tts.lastError,
     model: ai.model,
     now: new Date().toISOString()
   });
@@ -206,19 +209,17 @@ app.post(
   }
 );
 
-app.post('/api/practice/tts', async (req, res, next) => {
+app.post('/api/practice/tts', async (req, res) => {
   const text = cleanText(req.body?.text, 400);
   if (!text) return res.status(400).json({ error: 'Пустой текст' });
   if (!tts.enabled) return res.status(503).json({ error: 'Озвучивание не настроено' });
   try {
     const buffer = await tts.getBuffer(text);
-    res.set({
-      'Content-Type': 'audio/mpeg',
-      'Content-Length': String(buffer.length),
-      'Cache-Control': 'private, max-age=300'
-    });
-    res.end(buffer);
-  } catch (error) { next(error); }
+    sendAudioBuffer(req, res, buffer, 'private, max-age=300');
+  } catch (error) {
+    console.error('[tts] practice generation failed:', error.message);
+    res.status(502).json({ error: `Озвучивание недоступно: ${tts.describeError(error)}` });
+  }
 });
 
 app.get('/api/profiles', requireTeacher, (_req, res) => {
@@ -384,19 +385,23 @@ app.post(
   }
 );
 
-app.get('/api/audio/:playToken', async (req, res, next) => {
+// The student page loads this into an <audio> element, so a failure must never
+// reach it as the generic HTML/JSON 500 page: the browser reports that as an
+// unsupported source ("Браузер не смог проиграть это аудио"), which hides the
+// real cause. Answer with an explicit status the client can read instead.
+app.get('/api/audio/:playToken', async (req, res) => {
+  const play = tts.getPlayToken(req.params.playToken);
+  if (!play) {
+    return res.status(410).json({ error: 'Ссылка на аудио устарела — попросите преподавателя повторить фразу' });
+  }
+  let buffer;
   try {
-    const play = tts.getPlayToken(req.params.playToken);
-    if (!play) return res.status(404).json({ error: 'Audio token expired' });
-    const buffer = await tts.getBuffer(play.text, play.voiceId);
-    res.set({
-      'Content-Type': 'audio/mpeg',
-      'Content-Length': String(buffer.length),
-      'Cache-Control': 'private, max-age=600',
-      'Accept-Ranges': 'bytes'
-    });
-    res.end(buffer);
-  } catch (error) { next(error); }
+    buffer = await tts.getBuffer(play.text, play.voiceId);
+  } catch (error) {
+    console.error('[tts] playback generation failed:', error.message);
+    return res.status(502).json({ error: `Озвучивание недоступно: ${tts.describeError(error)}` });
+  }
+  sendAudioBuffer(req, res, buffer, 'private, max-age=600');
 });
 
 app.get('/api/openapi.json', (_req, res) => res.json(openapi));
@@ -451,7 +456,7 @@ io.on('connection', (socket) => {
   socket.on('teacher:mic-committed', async (payload, ack = () => {}) => {
     if (role !== 'teacher') return ack({ ok: false, error: 'forbidden' });
     const text = cleanText(payload?.text, 1200);
-    if (!text) return ack({ ok: false, error: 'empty' });
+    if (!text) return ack({ ok: false, error: 'Пустая реплика' });
     teacherVoiceState.set(roomCode, { text, partial: '', updatedAt: Date.now() });
     io.to(`teacher:${roomCode}`).emit('teacher:mic-text', { text, at: Date.now() });
     try {
@@ -476,7 +481,7 @@ io.on('connection', (socket) => {
   socket.on('student:committed', async (payload, ack = () => {}) => {
     if (role !== 'student') return ack({ ok: false, error: 'forbidden' });
     const text = cleanText(payload?.text, 1200);
-    if (!text) return ack({ ok: false, error: 'empty' });
+    if (!text) return ack({ ok: false, error: 'Пустая реплика' });
     const turnId = randomToken().slice(0, 12);
     const state = turnState.get(roomCode) || { recentTurns: [], generationSeq: 0 };
     state.generationSeq += 1;
@@ -558,11 +563,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('teacher:candidate', (payload, ack = () => {}) => {
-    if (role !== 'teacher') return ack({ ok: false, error: 'forbidden' });
-    const state = turnState.get(roomCode);
-    if (!state) return ack({ ok: false, error: 'no_turn' });
+    if (role !== 'teacher') return ack({ ok: false, error: 'Только преподаватель может выбрать фразу' });
+    // A lesson opens with the teacher greeting the student, so there is no turn
+    // yet — the phrase editor must work from the very first second rather than
+    // refusing every phrase with "no_turn" until the student says something.
+    const state = ensureTurnState(roomCode);
     const text = cleanText(payload?.text, 1000);
-    if (!text) return ack({ ok: false, error: 'empty' });
+    if (!text) return ack({ ok: false, error: 'Пустая фраза' });
     state.selectedText = text;
     state.selectedVariant = String(payload?.variant || 'manual');
     turnState.set(roomCode, state);
@@ -587,8 +594,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('teacher:speak', async (payload, ack = () => {}) => {
-    if (role !== 'teacher') return ack({ ok: false, error: 'forbidden' });
-    const state = turnState.get(roomCode);
+    if (role !== 'teacher') return ack({ ok: false, error: 'Только преподаватель может озвучивать фразы' });
+    const state = ensureTurnState(roomCode);
     const text = cleanText(payload?.text || state?.selectedText || state?.candidate?.main, 1000);
     if (!text) return ack({ ok: false, error: 'Нет текста для озвучивания' });
     const playbackRate = Math.max(0.6, Math.min(1.25, Number(payload?.playbackRate || 1)));
@@ -601,22 +608,35 @@ io.on('connection', (socket) => {
     };
 
     const voice = tts.resolveVoice(payload?.voice);
-    let speechPayload;
+    let speechPayload = null;
+    let ttsError = '';
     if (tts.enabled && voice) {
-      const playToken = tts.createPlayToken({ roomCode, text, transcriptMeta, playbackRate, voiceId: voice.id });
-      speechPayload = {
-        mode: 'elevenlabs',
-        audioUrl: `/api/audio/${playToken}`,
-        text,
-        playbackRate,
-        transcriptMeta,
-        turnId: state?.turnId || null,
-        source,
-        voice: voice.key,
-        voiceLabel: voice.label
-      };
-      void tts.prefetch([text], voice.id);
-    } else {
+      try {
+        // Synthesise BEFORE announcing the phrase. The prefetch on candidate
+        // selection means this is normally an instant cache hit, and it stops a
+        // dead ElevenLabs call (expired key, spent quota, throttling) from
+        // reaching the student as an audio link that plays nothing while the
+        // teacher is told everything worked.
+        await tts.getBuffer(text, voice.id);
+        const playToken = tts.createPlayToken({ roomCode, text, transcriptMeta, playbackRate, voiceId: voice.id });
+        speechPayload = {
+          mode: 'elevenlabs',
+          audioUrl: `/api/audio/${playToken}`,
+          text,
+          playbackRate,
+          transcriptMeta,
+          turnId: state?.turnId || null,
+          source,
+          voice: voice.key,
+          voiceLabel: voice.label
+        };
+      } catch (error) {
+        ttsError = tts.describeError(error);
+        console.error('[tts] speak failed, falling back to the browser voice:', error.message);
+      }
+    }
+    if (!speechPayload) {
+      // The browser voice keeps the lesson audible even when ElevenLabs is down.
       speechPayload = {
         mode: 'browser',
         audioUrl: null,
@@ -626,17 +646,16 @@ io.on('connection', (socket) => {
         turnId: state?.turnId || null,
         source,
         voice: null,
-        voiceLabel: 'Голос браузера'
+        voiceLabel: 'Голос браузера',
+        ttsError: ttsError || ''
       };
     }
 
     io.to(`student:${roomCode}`).emit('student:speak', speechPayload);
     io.to(`teacher:${roomCode}`).emit('speech:sent', speechPayload);
-    if (state) {
-      state.recentTurns = [...(state.recentTurns || []), { role: 'teacher', text }].slice(-12);
-      state.lastSpoken = speechPayload;
-      turnState.set(roomCode, state);
-    }
+    state.recentTurns = [...(state.recentTurns || []), { role: 'teacher', text }].slice(-12);
+    state.lastSpoken = speechPayload;
+    turnState.set(roomCode, state);
     await store.updateSession(roomCode, { lastSpoken: { text, at: new Date().toISOString(), turnId: state?.turnId || null } });
     await store.addLog({
       sessionCode: roomCode,
@@ -649,7 +668,13 @@ io.on('connection', (socket) => {
       voice: speechPayload.voice,
       scaffoldLevel: store.getSession(roomCode)?.scaffoldLevel || 0
     });
-    ack({ ok: true, mode: speechPayload.mode, voice: speechPayload.voice, voiceLabel: speechPayload.voiceLabel });
+    ack({
+      ok: true,
+      mode: speechPayload.mode,
+      voice: speechPayload.voice,
+      voiceLabel: speechPayload.voiceLabel,
+      ttsError
+    });
   });
 
   socket.on('student:assist', async (payload) => {
@@ -797,6 +822,16 @@ function cleanText(value, max = 1000) {
 function cleanWordList(value) {
   const items = Array.isArray(value) ? value : String(value || '').split(/[\n,;]/);
   return [...new Set(items.map((item) => cleanText(item, 80)).filter(Boolean))].slice(0, 12);
+}
+
+// Turn state is created when the student speaks, but the teacher acts first:
+// greeting the class, sending a typed phrase, dictating a command. Give those
+// a turn to hang on to instead of rejecting them.
+function ensureTurnState(roomCode) {
+  const state = turnState.get(roomCode) || { recentTurns: [], generationSeq: 0 };
+  if (!state.turnId) state.turnId = randomToken().slice(0, 12);
+  turnState.set(roomCode, state);
+  return state;
 }
 
 function firstKeyword(text) {

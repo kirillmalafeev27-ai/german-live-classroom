@@ -377,8 +377,29 @@ function isAutoplayBlocked(error) {
 }
 function describeAudioError(error) {
   if (isAutoplayBlocked(error)) return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043B\u043E\u043A\u0438\u0440\u043E\u0432\u0430\u043B \u0437\u0432\u0443\u043A. \u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u2014 \u0434\u0430\u043B\u044C\u0448\u0435 \u0432\u0441\u0451 \u0438\u0433\u0440\u0430\u0435\u0442 \u0441\u0430\u043C\u043E.";
-  if (error?.name === "NotSupportedError") return "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043D\u0435 \u0441\u043C\u043E\u0433 \u043F\u0440\u043E\u0438\u0433\u0440\u0430\u0442\u044C \u044D\u0442\u043E \u0430\u0443\u0434\u0438\u043E. \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443 \u0438\u043B\u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 Chrome/Safari \u043F\u043E\u0441\u0432\u0435\u0436\u0435\u0435.";
+  if (error?.name === "AudioSourceError") return error.message;
+  if (error?.name === "NotSupportedError") return "\u0424\u0430\u0439\u043B \u043E\u0437\u0432\u0443\u0447\u043A\u0438 \u043D\u0435 \u043E\u0442\u043A\u0440\u044B\u043B\u0441\u044F. \u0412\u043A\u043B\u044E\u0447\u0430\u044E \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.";
   return `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0430\u0443\u0434\u0438\u043E: ${error?.message || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430"}`;
+}
+async function loadAudioClip(url, { token = "" } = {}) {
+  let response;
+  try {
+    response = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch (error) {
+    throw Object.assign(new Error("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043A\u0430\u0447\u0430\u0442\u044C \u043E\u0437\u0432\u0443\u0447\u043A\u0443 \u2014 \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u0441\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435"), { name: "AudioSourceError", cause: error });
+  }
+  if (!response.ok) {
+    let message = `\u0421\u0435\u0440\u0432\u0435\u0440 \u043E\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u043D\u0438\u044F \u043E\u0442\u0432\u0435\u0442\u0438\u043B ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {
+    }
+    throw Object.assign(new Error(message), { name: "AudioSourceError", status: response.status });
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw Object.assign(new Error("\u0421\u0435\u0440\u0432\u0435\u0440 \u043F\u0440\u0438\u0441\u043B\u0430\u043B \u043F\u0443\u0441\u0442\u0443\u044E \u043E\u0437\u0432\u0443\u0447\u043A\u0443"), { name: "AudioSourceError" });
+  return blob;
 }
 function createAudioGate({ onChange = () => {
 } } = {}) {
@@ -387,6 +408,12 @@ function createAudioGate({ onChange = () => {
   let unlocked = false;
   let pending = null;
   let unlocking = null;
+  let objectUrl = "";
+  const releaseObjectUrl = () => {
+    if (!objectUrl) return;
+    URL.revokeObjectURL(objectUrl);
+    objectUrl = "";
+  };
   const ensureElement = () => {
     if (element) return element;
     element = new Audio();
@@ -473,16 +500,25 @@ function createAudioGate({ onChange = () => {
       });
       return unlocking;
     },
-    // Resolves when the clip finishes; rejects with the browser error when the
-    // browser refuses to start it, so callers can offer the unlock button.
-    async play(url, { rate = 1 } = {}) {
+    // Accepts a URL or a Blob (a Blob avoids pointing <audio> at an endpoint
+    // that might answer with a JSON error, which browsers report only as an
+    // unsupported source). Resolves when the clip finishes; rejects with the
+    // browser error when the browser refuses to start it, so callers can offer
+    // the unlock button.
+    async play(source, { rate = 1 } = {}) {
       const el = ensureElement();
       clearPending("resolve");
       try {
         el.pause();
       } catch {
       }
-      el.src = url;
+      releaseObjectUrl();
+      if (source instanceof Blob) {
+        objectUrl = URL.createObjectURL(source);
+        el.src = objectUrl;
+      } else {
+        el.src = source;
+      }
       try {
         el.load();
       } catch {
@@ -515,6 +551,7 @@ function createAudioGate({ onChange = () => {
         } catch {
         }
       }
+      releaseObjectUrl();
       if ("speechSynthesis" in window) {
         try {
           speechSynthesis.cancel();
@@ -960,12 +997,7 @@ async function playSpeech(payload, rate = 1) {
   els.listenCard.classList.add("speaking");
   els.listenState.textContent = payload.source === "teacher_mic" ? "\u0421\u043B\u0443\u0448\u0430\u0439\u0442\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0443\u2026" : "\u0421\u043B\u0443\u0448\u0430\u0439\u0442\u0435\u2026";
   try {
-    if (payload.mode === "elevenlabs" && payload.audioUrl) {
-      await state.audio.play(payload.audioUrl, { rate });
-    } else {
-      if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
-      await speakWithBrowser(payload.text, rate, state.germanVoice);
-    }
+    await speakPayload(payload, rate);
     els.listenState.textContent = payload.source === "teacher_mic" ? "\u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0443 \u0438\u043B\u0438 \u043E\u0442\u0432\u0435\u0442\u044C\u0442\u0435" : "\u0422\u0435\u043F\u0435\u0440\u044C \u043E\u0442\u0432\u0435\u0442\u044C\u0442\u0435 \u043F\u043E-\u043D\u0435\u043C\u0435\u0446\u043A\u0438";
   } catch (error) {
     reportPlaybackFailure(payload, error);
@@ -975,6 +1007,26 @@ async function playSpeech(payload, rate = 1) {
     setTimeout(() => state.capture?.resume(), 220);
   }
 }
+async function speakPayload(payload, rate) {
+  if (payload.mode === "elevenlabs" && payload.audioUrl) {
+    try {
+      const clip = await loadAudioClip(payload.audioUrl);
+      await state.audio.play(clip, { rate });
+      return;
+    } catch (error) {
+      if (isAutoplayBlocked(error)) throw error;
+      console.warn("[audio] ElevenLabs playback failed, using the browser voice:", error);
+      toast(`${describeAudioError(error)} \u0412\u043A\u043B\u044E\u0447\u0430\u044E \u0433\u043E\u043B\u043E\u0441 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.`, "warn", 5e3);
+    }
+  } else if (payload.ttsError) {
+    toast(`\u0413\u043E\u043B\u043E\u0441 ElevenLabs \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D: ${payload.ttsError}. \u0427\u0438\u0442\u0430\u044E \u0433\u043E\u043B\u043E\u0441\u043E\u043C \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.`, "warn", 5e3);
+  }
+  await speakWithBrowserVoice(payload.text, rate);
+}
+async function speakWithBrowserVoice(text, rate) {
+  if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+  await speakWithBrowser(text, rate, state.germanVoice);
+}
 function reportPlaybackFailure(payload, error) {
   if (isAutoplayBlocked(error)) {
     state.pendingSpeech = payload;
@@ -982,21 +1034,22 @@ function reportPlaybackFailure(payload, error) {
     els.listenState.textContent = "\u041D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u0412\u043A\u043B\u044E\u0447\u0438\u0442\u044C \u0437\u0432\u0443\u043A\xBB, \u0447\u0442\u043E\u0431\u044B \u0443\u0441\u043B\u044B\u0448\u0430\u0442\u044C \u043F\u0440\u0435\u043F\u043E\u0434\u0430\u0432\u0430\u0442\u0435\u043B\u044F";
     els.audioUnlock.scrollIntoView?.({ block: "center", behavior: "smooth" });
   } else {
-    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435 \u0432\u043E\u0441\u043F\u0440\u043E\u0438\u0437\u0432\u0451\u043B\u0441\u044F \u2014 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \xAB\u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u044C\xBB";
+    els.listenState.textContent = "\u0417\u0432\u0443\u043A \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u2014 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u043A\u043D\u043E\u043F\u043A\u043E\u0439 \xAB\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0442\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0442\xBB";
+    reveal("transcript", "transcript_no_audio");
   }
   toast(describeAudioError(error), "error", 6e3);
 }
 function replay(rate, action) {
   if (!state.currentSpeech) return;
   state.socket?.emit("student:assist", { action });
-  void playSpeech(state.currentSpeech, rate);
+  void state.audio.unlock().then(() => playSpeech(state.currentSpeech, rate));
 }
 function resetReveal() {
   els.revealBox.hidden = true;
   els.revealLabel.textContent = "";
   els.revealText.textContent = "";
 }
-function reveal(type) {
+function reveal(type, action = type) {
   if (!state.currentSpeech) return;
   const meta = state.currentSpeech.transcriptMeta || {};
   const content = type === "keyword" ? meta.keyword : type === "starter" ? meta.starter : meta.full || state.currentSpeech.text;
@@ -1004,6 +1057,6 @@ function reveal(type) {
   els.revealLabel.textContent = labels[type];
   els.revealText.textContent = content || "\u2014";
   els.revealBox.hidden = false;
-  state.socket?.emit("student:assist", { action: type });
+  state.socket?.emit("student:assist", { action });
 }
 //# sourceMappingURL=student.js.map

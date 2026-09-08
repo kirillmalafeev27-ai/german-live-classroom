@@ -1,6 +1,7 @@
 import {
   $, esc, toast, setBusy, refreshMicrophoneSelect, startVoiceCapture, transcribeAudio,
-  createAudioGate, unlockOnFirstGesture, describeAudioError, isAutoplayBlocked
+  createAudioGate, unlockOnFirstGesture, describeAudioError, isAutoplayBlocked,
+  loadGermanVoice, speakWithBrowser
 } from './shared.js';
 
 const PROGRESS_STORAGE_KEY = 'glc.practiceProgress.v1';
@@ -23,6 +24,7 @@ const state = {
   micOn: false,
   lastAiText: '',
   audio: null,
+  germanVoice: null,
   speaking: false,
   pendingSpeech: null,
   pendingInputMethod: 'typed',
@@ -70,7 +72,9 @@ async function boot() {
       els.startMicButton.disabled = true;
       els.startMicButton.textContent = 'Микрофон недоступен';
     }
-    if (!state.config.ttsEnabled) {
+    // The browser voice covers self-study when ElevenLabs is not configured, so
+    // only a browser without speech synthesis at all disables the buttons.
+    if (!canSpeak()) {
       els.repeatButton.disabled = true;
       els.slowerButton.disabled = true;
     }
@@ -484,30 +488,61 @@ function flushPendingSpeech() {
 }
 
 async function speak(text, rate = 1) {
-  if (!state.config.ttsEnabled || !text) return;
+  if (!text || !canSpeak()) return;
   state.audio.stop();
   state.speaking = true;
   // Without this the microphone records the AI's own voice through the
   // speakers and sends it back as the learner's answer.
   state.capture?.pause();
-  let objectUrl = '';
   try {
-    const response = await fetch('/api/practice/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    });
-    if (!response.ok) throw new Error(`сервер озвучивания ответил ${response.status}`);
-    const blob = await response.blob();
-    objectUrl = URL.createObjectURL(blob);
-    await state.audio.play(objectUrl, { rate });
+    await speakText(text, rate);
   } catch (error) {
     reportSpeakFailure(text, rate, error);
   } finally {
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
     state.speaking = false;
     setTimeout(() => state.capture?.resume(), 220);
   }
+}
+
+// ElevenLabs when the server has it, the browser voice otherwise — self-study
+// stays usable even with no TTS key configured or an exhausted quota.
+async function speakText(text, rate) {
+  if (state.config.ttsEnabled) {
+    try {
+      const clip = await fetchPracticeClip(text);
+      await state.audio.play(clip, { rate });
+      return;
+    } catch (error) {
+      if (isAutoplayBlocked(error)) throw error;
+      console.warn('[audio] practice TTS failed, using the browser voice:', error);
+      toast(`${describeAudioError(error)} Включаю голос браузера.`, 'warn', 5000);
+    }
+  }
+  if (!state.germanVoice) state.germanVoice = await loadGermanVoice();
+  await speakWithBrowser(text, rate, state.germanVoice);
+}
+
+async function fetchPracticeClip(text) {
+  const response = await fetch('/api/practice/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    let message = `Сервер озвучивания ответил ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw Object.assign(new Error(message), { name: 'AudioSourceError', status: response.status });
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw Object.assign(new Error('Сервер прислал пустую озвучку'), { name: 'AudioSourceError' });
+  return blob;
+}
+
+function canSpeak() {
+  return state.config.ttsEnabled || 'speechSynthesis' in window;
 }
 
 // TTS used to fail silently, so a blocked or broken voice looked exactly like a
@@ -519,7 +554,9 @@ function reportSpeakFailure(text, rate, error) {
     els.listenState.textContent = 'Нажмите «Включить звук», чтобы услышать ответ';
     els.audioUnlock?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
   } else {
-    els.listenState.textContent = 'Звук недоступен — откройте текст кнопкой «Показать текст»';
+    els.listenState.textContent = 'Звук недоступен — читайте текст ответа';
+    // Nothing can be heard, so stop hiding the reply behind a button.
+    if (els.revealBox) els.revealBox.hidden = false;
   }
   toast(describeAudioError(error), 'error', 5000);
 }

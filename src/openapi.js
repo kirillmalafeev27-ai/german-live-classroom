@@ -65,13 +65,13 @@ export const openapi = {
       post: { summary: 'Transcribe self-study audio via Whisper (no room)', requestBody: { required: true, content: { 'audio/webm': {} } }, responses: { '200': { description: 'Recognised text' } } }
     },
     '/api/practice/tts': {
-      post: { summary: 'Voice a German phrase for self-study', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } } } }, responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } } } }
+      post: { summary: 'Voice a German phrase for self-study', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } } } } }, responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } }, '502': { description: 'TTS provider error' }, '503': { description: 'TTS not configured' } } }
     },
     '/api/stt/transcribe': {
       post: { security: [{ teacherBearer: [] }, { studentBearer: [] }], summary: 'Transcribe a recorded audio segment via AITUNNEL Whisper', parameters: [{ in: 'query', name: 'room', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'audio/webm': {}, 'audio/mp4': {}, 'audio/ogg': {} } }, responses: { '200': { description: 'Recognised text' }, '401': { description: 'Unauthorized' }, '502': { description: 'STT provider error' }, '503': { description: 'STT not configured' } } }
     },
     '/api/audio/{playToken}': {
-      get: { summary: 'Stream a teacher-approved German phrase as audio', parameters: [{ in: 'path', name: 'playToken', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } } } }
+      get: { summary: 'Stream a teacher-approved German phrase as audio', parameters: [{ in: 'path', name: 'playToken', required: true, schema: { type: 'string' } }, { in: 'header', name: 'Range', required: false, schema: { type: 'string' }, description: 'Byte range; answered with 206' }], responses: { '200': { description: 'MP3 stream', content: { 'audio/mpeg': {} } }, '206': { description: 'Partial MP3 stream', content: { 'audio/mpeg': {} } }, '410': { description: 'Play token expired' }, '416': { description: 'Range not satisfiable' }, '502': { description: 'TTS provider error' } } }
     }
   }
 };
